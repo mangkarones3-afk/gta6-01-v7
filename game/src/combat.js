@@ -1,30 +1,58 @@
-// combat.js — gunfire: the player's pistol, hostile actors returning fire,
-// SBPD shooting at high wanted levels, bullets against bodies, cars and
-// walls, and the damage that ends in a hospital visit.
+// combat.js — gunfire: the player's three-weapon arsenal, hostile actors
+// returning fire, SBPD shooting at high wanted levels, bullets against
+// bodies, cars and walls, and the damage that ends in a hospital visit.
 
 import { circleBlocked } from './city.js';
 import { scarePeds } from './pedestrians.js';
 import { clamp } from './random.js';
 
-export const WEAPON = { name: 'Pistol', rate: 0.24, speed: 95, damage: 34, spread: 0.035 };
+// The arsenal. One shared magazine and reserve — Marco's crate feeds all
+// three — but each weapon fires its own way: the Pistol is the accurate
+// all-rounder, the Ráfaga trades damage for a fast automatic cycle and a
+// wide cone, and the Escopeta throws six pellets in one slow, heavy pull.
+// Slots unlock as the story advances (Ráfaga after Chapter 8, Escopeta
+// after Chapter 12); the HUD weapon chip shows owned and locked alike.
+export const WEAPONS = [
+  { name: 'Pistol', rate: 0.24, speed: 95, damage: 34, spread: 0.035, pellets: 1 },
+  { name: 'Ráfaga', rate: 0.085, speed: 95, damage: 15, spread: 0.085, pellets: 1 },
+  { name: 'Escopeta', rate: 0.8, speed: 82, damage: 13, spread: 0.17, pellets: 6 },
+];
+export const WEAPON = WEAPONS[0];
+
+export function weaponOwned(G, i) {
+  if (i === 0) return true;
+  const idx = G.missions ? G.missions.index : 0;
+  const done = G.missions ? !!G.missions.storyDone : false;
+  if (i === 1) return done || idx >= 8;
+  if (i === 2) return done || idx >= 12;
+  return false;
+}
+
+export function currentWeapon(G) {
+  return WEAPONS[G.weaponIndex || 0] || WEAPONS[0];
+}
 
 export function tryPlayerShoot(G, aimX, aimY) {
   const p = G.player;
   if (p.car || G.mode !== 'play' || p.health <= 0) return false;
   if (G.fireCooldown > 0) return false;
-  G.fireCooldown = WEAPON.rate;
-  const a = Math.atan2(aimY - p.y, aimX - p.x) + (Math.random() - 0.5) * WEAPON.spread;
-  p.angle = a;
-  G.bullets.push({
-    x: p.x + Math.cos(a) * 0.7,
-    y: p.y + Math.sin(a) * 0.7,
-    vx: Math.cos(a) * WEAPON.speed,
-    vy: Math.sin(a) * WEAPON.speed,
-    life: 0.85,
-    from: 'player',
-    damage: WEAPON.damage,
-  });
-  G.effects.push({ type: 'muzzle', x: p.x + Math.cos(a) * 0.85, y: p.y + Math.sin(a) * 0.85, t: 0.055 });
+  const W = currentWeapon(G);
+  G.fireCooldown = W.rate;
+  const base = Math.atan2(aimY - p.y, aimX - p.x);
+  p.angle = base;
+  for (let i = 0; i < W.pellets; i++) {
+    const a = base + (Math.random() - 0.5) * W.spread * (W.pellets > 1 ? 2 : 1);
+    G.bullets.push({
+      x: p.x + Math.cos(a) * 0.7,
+      y: p.y + Math.sin(a) * 0.7,
+      vx: Math.cos(a) * W.speed,
+      vy: Math.sin(a) * W.speed,
+      life: 0.85,
+      from: 'player',
+      damage: W.damage,
+    });
+  }
+  G.effects.push({ type: 'muzzle', x: p.x + Math.cos(base) * 0.85, y: p.y + Math.sin(base) * 0.85, t: 0.055 });
   G.audio?.gunshot();
   scarePeds(G.peds, p.x, p.y, 30);
   if (G.wanted.seenByPolice(G)) G.wanted.addHeat(16);
@@ -121,6 +149,11 @@ export function updateCombat(G, dt) {
         if (target.dead) continue;
         if (Math.hypot(target.x - b.x, target.y - b.y) < 0.65) {
           target.health -= b.damage;
+          // Hit-stop (JF4): a confirmed hit freezes the world clock for
+          // a beat — 0.06 s for a wound, 0.12 s when the hit puts the
+          // target down. The frame loop scales dt while G.hitStop runs
+          // down on real time and restores the scale to exactly 1.
+          G.hitStop = Math.max(G.hitStop || 0, target.health <= 0 ? 0.12 : 0.06);
           G.effects.push({ type: 'hit', x: b.x, y: b.y, t: 0.12 });
           if (target.health <= 0 && !target.dead) {
             target.dead = true;

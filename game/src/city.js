@@ -49,8 +49,8 @@ const DISTRICT_GRID = [
 ];
 const GROUND_TINTS = [
   ['#8f8578', '#94897b', '#978c7c', '#8d867e', '#968a76', '#94897b'],
-  ['#978c7c', '#9a8d77', '#a08f74', '#8f8578', '#8f9478', '#8f9478'],
-  ['#8a8073', '#94897b', '#91887c', '#8f8578', '#978c7c', '#8f8a76'],
+  ['#978c7c', '#9a8d77', '#72766e', '#8f8578', '#8f9478', '#8f9478'],
+  ['#8a8073', '#94897b', '#b8ac92', '#8f8578', '#978c7c', '#8f8a76'],
   ['#c9b18a', '#c9b18a', '#c9b18a', '#c9b18a', '#c2ab84', '#c2ab84'],
 ];
 
@@ -263,6 +263,26 @@ function buildCity() {
 }
 buildCity();
 
+// Round 19 (cover surgery, late-add — fresh rng, no shift to any
+// existing building): the market annexe "La Lonja" fills the free
+// strip between Carnicería Pepe and Floristería Lila on Calle del
+// Mercado (spec rect insets by the market 2 m to 471–487 × 256–346;
+// the north end stops 1 m short of the plaza stall row at y 249–255),
+// so its south-edge plate hangs at cy 347.7 — the same latitude as
+// Carnicería's. Carnicería's own plate flips to its east corner, and
+// the two plates sit ~6 m apart in one row: the tightest signed
+// frontage pair in the city, staged for the cover's top band.
+{
+  const carn = buildingByName('Carnicería Pepe');
+  if (carn) carn.signAnchor = 'E';
+  addBuilding(makeRandom(20261120), {
+    rect: { x: 469, y: 254, w: 20, h: 94 },
+    name: 'La Lonja',
+    kind: 'market',
+    height: 10,
+  });
+}
+
 export function buildingByName(name) {
   return BUILDINGS.find((b) => b.name === name) || null;
 }
@@ -378,6 +398,20 @@ function buildProps() {
   dress('crate', 108.5, 318, { rot: -0.42 }, [1.2, 1.2]);
   dress('bin', 108.7, 326, null, [0.8, 0.9]);
   dress('planter', 108.4, 342, null, [1.9, 1.0]);
+  // Painted kerb and apron bands along the El Mercado frontage:
+  // flat municipal paintwork in the same dressing vocabulary as
+  // the Central and Faro frontages — a cream pedestrian band, a
+  // buff terrace edge, and the blue zona-azul parking band along
+  // the kerb, interrupted by one clay loading marker. Paint is
+  // flat on the ground (no solid).
+  const band = (x0, x1, y, color, h = 0.25) => {
+    PROPS.push({ t: 'paveband', x: x0, y, w: x1 - x0, h, color });
+  };
+  band(380, 480, 348.53, '#e0c498', 0.32);
+  band(380, 480, 349.17, '#d5b588', 0.32);
+  band(380, 463, 350.84, '#627384', 0.32);
+  band(470.5, 480, 350.84, '#627384', 0.32);
+  PROPS.push({ t: 'paveband', x: 463, y: 350.84, w: 7.5, h: 0.32, color: '#c6875e', fe: 0 });
 }
 buildProps();
 
@@ -414,6 +448,7 @@ export const FORECOURTS = [
   { x: 556, y: 349.2, w: 88, h: 4.6 },
   { x: 66, y: 349.2, w: 44, h: 4.6 },
 ];
+
 
 export const POIS = {
   home: { x: 960, y: 360 },

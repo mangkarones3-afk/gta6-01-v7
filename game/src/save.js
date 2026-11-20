@@ -13,13 +13,21 @@ export function hasSave() {
 
 export function writeSave(G) {
   try {
+    const prog = G.progress && typeof G.progress === 'object' ? G.progress : {};
     const data = {
       cash: G.player.cash,
       health: G.player.health,
       armour: G.player.armour,
+      respect: G.respect || 0,
+      weapon: G.weaponIndex || 0,
       missionIndex: G.missions.index,
       storyDone: G.missions.storyDone,
       jobsDone: G.missions.jobsDone,
+      // The street layer (activities.js): race best times, stunt
+      // landings and caracolas found — the career the title prints.
+      racesBest: prog.racesBest && typeof prog.racesBest === 'object' ? prog.racesBest : {},
+      stuntsLanded: Array.isArray(prog.stuntsLanded) ? prog.stuntsLanded : [],
+      caracolasFound: Array.isArray(prog.caracolasFound) ? prog.caracolasFound : [],
       x: G.player.x,
       y: G.player.y,
       timeOfDay: G.timeOfDay,

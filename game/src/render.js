@@ -3,15 +3,17 @@
 // updateCamera(G, dt) every frame, and render(ctx, G) every frame.
 // G.camera is the object returned by makeCamera(); solano-bay-game.js drives it
 // during the title drift and reads it back, updateCamera owns the
-// gameplay follow + zoom (48 m on foot, 82 m in a car, 150 m title).
+// gameplay follow + zoom (48 m on foot, 82 m in a car, 150 m title; the
+// player can step the follow zoom with the wheel or +/− keys — round 27).
 
 import {
   AVENUES, STREETS, BUILDINGS, PROPS, WATER, DECKS, WORLD, BEACH_Y,
   STREET_W, FORECOURTS, districtAt, streetNameAt,
 } from './city.js';
 import { CHARACTERS } from './missions.js';
+import { RACES, STUNTS, CARACOLAS, careerPct, raceWins } from './activities.js';
 import { STATIONS } from './audio.js';
-import { WEAPON } from './combat.js';
+import { WEAPONS, currentWeapon } from './combat.js';
 import { drawMinimap, drawCityMap } from './minimap.js';
 
 // ---------------------------------------------------------------- helpers
@@ -103,13 +105,17 @@ function pal(G) {
 
 // ---------------------------------------------------------------- camera
 export function makeCamera() {
-  return { x: 620, y: 550, viewW: 150, scale: 1280 / 150, snap: false };
+  return { x: 620, y: 550, viewW: 150, scale: 1280 / 150, snap: false, zoomSteps: 0 };
 }
 
 export function updateCamera(G, dt) {
   if (!G || !G.camera) return;
   const cam = G.camera;
   const W = (G.canvas && G.canvas.width) || (G.ctx && G.ctx.canvas && G.ctx.canvas.width) || 1280;
+  if (cam.hold) { // staged-shot hold: staging functions only, never set in play
+    cam.scale = W / Math.max(20, num(cam.viewW, 150));
+    return;
+  }
   const step = clamp(num(dt, 0.016), 0, 0.05);
   let targetW = 150;
   let tx = null;
@@ -120,6 +126,27 @@ export function updateCamera(G, dt) {
     tx = car ? num(car.x, num(p.x, cam.x)) : num(p.x, cam.x);
     ty = car ? num(car.y, num(p.y, cam.y)) : num(p.y, cam.y);
     targetW = car ? 82 : 48;
+    // Round 27: player zoom. Wheel notches and the +/− keys move an
+    // integer step count around this state's automatic width (positive
+    // step = closer). Step 0 is a factor of exactly 1, so zooming back
+    // out returns to the state default exactly. The range keeps the
+    // follow view between ~21 m and ~135 m: wide enough to stay inside
+    // the drawn world, tight enough that the scale clamp below (20 m)
+    // never binds. The minimap keeps its own 220 m scale throughout.
+    const inp = G.input;
+    if (inp) {
+      if (inp.wheelSteps) {
+        cam.zoomSteps = num(cam.zoomSteps, 0) - inp.wheelSteps;
+        inp.wheelSteps = 0;
+      }
+      if (typeof inp.pressed === 'function') {
+        if (inp.pressed('Equal') || inp.pressed('NumpadAdd')) cam.zoomSteps = num(cam.zoomSteps, 0) + 1;
+        if (inp.pressed('Minus') || inp.pressed('NumpadSubtract')) cam.zoomSteps = num(cam.zoomSteps, 0) - 1;
+      }
+      cam.zoomSteps = clamp(Math.round(num(cam.zoomSteps, 0)), -3, 5);
+    }
+    const zs = num(cam.zoomSteps, 0);
+    if (zs !== 0) targetW = targetW / Math.pow(1.18, zs);
   }
   const snap = !!cam.snap;
   const kz = snap ? 1 : 1 - Math.exp(-step * 4.2);
@@ -129,6 +156,9 @@ export function updateCamera(G, dt) {
     cam.x = num(cam.x, tx) + (tx - num(cam.x, tx)) * kp;
     cam.y = num(cam.y, ty) + (ty - num(cam.y, ty)) * kp;
   }
+  // At rest on the default (zoom step 0) settle the last fraction of the
+  // ease exactly onto the target width, so the default view is exact.
+  if (num(cam.zoomSteps, 0) === 0 && Math.abs(num(cam.viewW, 150) - targetW) < 0.05) cam.viewW = targetW;
   cam.scale = W / Math.max(20, num(cam.viewW, 150));
   if (snap) cam.snap = false;
 }
@@ -237,11 +267,47 @@ function drawGround(ctx, G, V) {
       ctx.fillRect(V.toX(bx0), V.toY(by0), (bx1 - bx0) * s, (by1 - by0) * s);
       // Lot speckle: small wear flecks so the pavement reads at patch
       // scale, not only in the broad tone pools.
-      for (let k = 0; k < 16; k++) {
+      for (let k = 0; k < 110; k++) {
         const sx2 = bx0 + 1 + hash2(i * 31 + k * 7, j * 17 + k * 3) * Math.max(1, bx1 - bx0 - 3);
         const sy2 = by0 + 1 + hash2(i * 13 + k * 5, j * 29 + k * 11) * Math.max(1, by1 - by0 - 3);
-        ctx.fillStyle = hash2(i + k * 3, j + k) > 0.5 ? 'rgba(0,0,0,0.075)' : 'rgba(255,255,255,0.06)';
-        ctx.fillRect(V.toX(sx2), V.toY(sy2), (0.4 + hash2(k, i) * 0.7) * s, (0.35 + hash2(j, k) * 0.6) * s);
+        const dark = hash2(i + k * 3, j + k) > 0.5;
+        ctx.fillStyle = dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+        ctx.fillRect(V.toX(sx2 - 0.06), V.toY(sy2 - 0.05), (0.42 + hash2(k, i) * 0.55) * s, (0.37 + hash2(j, k) * 0.48) * s);
+        ctx.fillStyle = dark ? 'rgba(0,0,0,0.14)' : 'rgba(255,255,255,0.12)';
+        ctx.fillRect(V.toX(sx2), V.toY(sy2), (0.27 + hash2(k, i) * 0.38) * s, (0.23 + hash2(j, k) * 0.34) * s);
+      }
+    }
+  }
+
+  // Walking-scale wear on open ground: small soft tonal pools and
+  // flecks on a hashed world grid (roads and forecourts repaint their
+  // own wear over this; buildings cover what falls under them). The
+  // pools are tight and strong enough that a square metre of pavement
+  // sits on a real tonal slope — sun-bleach, damp and wear at the
+  // scale a walker actually sees.
+  for (let gx = Math.floor(V.x0 / 2.6) * 2.6; gx < V.x1; gx += 2.6) {
+    for (let gy = Math.floor(V.y0 / 2.6) * 2.6; gy < V.y1; gy += 2.6) {
+      const h = hash2(gx * 1.31 + 7, gy * 1.73 + 3);
+      if (h < 0.18) continue;
+      const cxw = gx + 0.4 + h * 1.8;
+      const cyw = gy + 0.4 + hash2(gx + 19, gy + 23) * 1.8;
+      const prad = (0.8 + hash2(gx + 5, gy + 11) * 0.7) * s;
+      const pcx = V.toX(cxw);
+      const pcy = V.toY(cyw);
+      const pg = ctx.createRadialGradient(pcx, pcy, 0, pcx, pcy, prad);
+      if (h > 0.65) {
+        pg.addColorStop(0, 'rgba(255,244,214,0.10)');
+        pg.addColorStop(1, 'rgba(255,244,214,0)');
+      } else {
+        pg.addColorStop(0, 'rgba(24,20,12,0.11)');
+        pg.addColorStop(1, 'rgba(24,20,12,0)');
+      }
+      ctx.fillStyle = pg;
+      ctx.fillRect(pcx - prad, pcy - prad, prad * 2, prad * 2);
+      const fh = hash2(gx * 2.9 + 1, gy * 3.7 + 13);
+      if (fh > 0.32) {
+        ctx.fillStyle = fh > 0.72 ? 'rgba(0,0,0,0.13)' : 'rgba(255,255,255,0.11)';
+        ctx.fillRect(V.toX(cxw + 0.8), V.toY(cyw + 0.6), (0.35 + fh * 0.45) * s, (0.3 + fh * 0.4) * s);
       }
     }
   }
@@ -323,7 +389,7 @@ function drawForecourts(ctx, G, V) {
     ctx.lineTo(x + w, V.toY(f.y + f.h / 2));
     ctx.stroke();
     // Speckle wear.
-    for (let i = 0; i < 46; i++) {
+    for (let i = 0; i < 84; i++) {
       const px = x + hash2(f.x + i * 3.7, f.y) * w;
       const py = y + hash2(f.y, f.x + i * 2.9) * h;
       ctx.fillStyle = hash2(f.x + i, f.y + 4) > 0.5 ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.08)';
@@ -350,11 +416,14 @@ function drawForecourts(ctx, G, V) {
 // Painted sun medallions on Calle del Mercado at the El Mercado crossing:
 // two-tone sand wedges laid into the carriageway, a grout rim and the same
 // hash speckle the asphalt carries, so the paint weathers like the road.
+// One more medallion centres the mid-block crossing west of the market
+// frontage, the same motif as the big disc at Av. Central.
 const MEDALLIONS = [
   [554, 355.5, 2.1], [562.5, 355.5, 2.1], [571, 355.5, 2.1], [579.5, 355.5, 2.1],
   [596.5, 355.5, 2.1], [605, 355.5, 2.1], [613.5, 355.5, 2.1], [622, 355.5, 2.1],
   [558, 364.5, 2.1], [574, 364.5, 2.1], [590, 364.5, 2.1], [606, 364.5, 2.1], [622, 364.5, 2.1],
   [600, 360, 2.6],
+  [471.5, 359.6, 3.0], [458.5, 359.6, 2.1],
 ];
 function drawMedallions(ctx, G, V) {
   const s = V.s;
@@ -364,24 +433,35 @@ function drawMedallions(ctx, G, V) {
     const cy = V.toY(my);
     const R = mr * s;
     for (let k = 0; k < 12; k++) {
-      ctx.fillStyle = k % 2 ? '#cdb26f' : '#d9b878';
+      ctx.fillStyle = k % 2 ? '#c39a52' : '#e8cc8d';
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       ctx.arc(cx, cy, R, (k * Math.PI) / 6, ((k + 1) * Math.PI) / 6);
       ctx.closePath();
       ctx.fill();
     }
-    ctx.fillStyle = '#cdb26f';
+    ctx.fillStyle = '#c39a52';
     ctx.beginPath(); ctx.arc(cx, cy, R * 0.34, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#d9b878';
+    ctx.fillStyle = '#e8cc8d';
     ctx.beginPath(); ctx.arc(cx, cy, R * 0.15, 0, Math.PI * 2); ctx.fill();
+    // Grout spokes between the wedges, hub to rim.
+    ctx.strokeStyle = 'rgba(138,109,59,0.45)';
+    ctx.lineWidth = Math.max(1, 0.045 * s);
+    ctx.beginPath();
+    for (let k = 0; k < 12; k++) {
+      const a = (k * Math.PI) / 6;
+      ctx.moveTo(cx + Math.cos(a) * R * 0.15, cy + Math.sin(a) * R * 0.15);
+      ctx.lineTo(cx + Math.cos(a) * R * 0.98, cy + Math.sin(a) * R * 0.98);
+    }
+    ctx.stroke();
     ctx.strokeStyle = '#8a6d3b';
     ctx.lineWidth = Math.max(1.2, 0.16 * s);
     ctx.beginPath(); ctx.arc(cx, cy, R - ctx.lineWidth / 2, 0, Math.PI * 2); ctx.stroke();
     ctx.strokeStyle = 'rgba(138,109,59,0.5)';
     ctx.lineWidth = Math.max(1, 0.07 * s);
     ctx.beginPath(); ctx.arc(cx, cy, R * 0.84, 0, Math.PI * 2); ctx.stroke();
-    for (let i = 0; i < 30; i++) {
+    ctx.beginPath(); ctx.arc(cx, cy, R * 0.55, 0, Math.PI * 2); ctx.stroke();
+    for (let i = 0; i < 90; i++) {
       const a = hash2(mx * 3 + i * 1.7, my * 5) * Math.PI * 2;
       const rr2 = Math.sqrt(hash2(mx + i * 2.3, my * 7)) * R * 0.9;
       const px = cx + Math.cos(a) * rr2;
@@ -389,6 +469,27 @@ function drawMedallions(ctx, G, V) {
       ctx.fillStyle = hash2(mx + i, my + 4) > 0.5 ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.09)';
       ctx.fillRect(px, py, 2 + hash2(i, my) * 3, 2);
     }
+  }
+}
+
+// Sun glint on the medallion hubs (round 24): the polished centre
+// inlay catches the noon sun AFTER the shade pass has banded the
+// wedges, so the hub reads as the one sun-struck point of the disc.
+function drawMedallionGlints(ctx, G, V) {
+  const tod = G.timeOfDay || 'day';
+  if (tod === 'night') return; // sun effect: full at noon, softer at dusk
+  const hub = tod === 'day' ? 0.30 : 0.22;
+  const s = V.s;
+  for (const [mx, my, mr] of MEDALLIONS) {
+    if (!inView(V, mx, my, mr + 2)) continue;
+    const cx = V.toX(mx);
+    const cy = V.toY(my);
+    const R = mr * s;
+    ctx.strokeStyle = '#fbfcfd';
+    ctx.lineWidth = Math.max(1.5, 0.07 * R);
+    ctx.beginPath(); ctx.arc(cx, cy, R * (hub + 0.035), 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(cx, cy, R * hub, 0, Math.PI * 2); ctx.fill();
   }
 }
 
@@ -425,20 +526,31 @@ function drawRoads(ctx, G, V) {
       ctx.fillRect(V.toX(tx), V.toY(t.y - half), 24 * s, STREET_W * s);
     }
   }
-  // Fine asphalt speckle: hash-placed wear flecks on a 3 m world grid,
-  // so a square metre of carriageway carries tonal steps of its own
-  // instead of one flat fill between the markings.
-  for (let gx = Math.floor(V.x0 / 3) * 3; gx < V.x1; gx += 3) {
-    for (let gy = Math.floor(V.y0 / 3) * 3; gy < V.y1; gy += 3) {
+  // Fine asphalt speckle: hash-placed wear flecks on a 1.4 m world
+  // grid, so a square metre of carriageway carries tonal steps of its
+  // own instead of one flat fill between the markings.
+  for (let gx = Math.floor(V.x0 / 1.4) * 1.4; gx < V.x1; gx += 1.4) {
+    for (let gy = Math.floor(V.y0 / 1.4) * 1.4; gy < V.y1; gy += 1.4) {
       const hh = hash2(gx * 1.7 + 5, gy * 2.3 + 9);
-      if (hh < 0.42) continue;
-      const onAve = AVENUES.some((a) => Math.abs(gx + 1.5 - a.x) < half - 0.4);
-      const onStr = STREETS.some((t) => Math.abs(gy + 1.5 - t.y) < half - 0.4);
+      if (hh < 0.30) continue;
+      const onAve = AVENUES.some((a) => Math.abs(gx + 0.7 - a.x) < half - 0.4);
+      const onStr = STREETS.some((t) => Math.abs(gy + 0.7 - t.y) < half - 0.4);
       if (!onAve && !onStr) continue;
-      const fx = gx + hh * 2.2;
-      const fy = gy + hash2(gx, gy * 3.1) * 2.2;
-      ctx.fillStyle = hh > 0.71 ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.075)';
-      ctx.fillRect(V.toX(fx), V.toY(fy), (0.35 + hh * 0.5) * s, (0.3 + hh * 0.4) * s);
+      const fx = gx + hh * 0.85;
+      const fy = gy + hash2(gx, gy * 3.1) * 0.85;
+      // Two-tone fleck: a pale rim offset under a darker core (or the
+      // reverse), so one fleck carries several tonal steps of its own.
+      if (hh > 0.71) {
+        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        ctx.fillRect(V.toX(fx - 0.07), V.toY(fy - 0.06), (0.44 + hh * 0.5) * s, (0.38 + hh * 0.42) * s);
+        ctx.fillStyle = 'rgba(0,0,0,0.14)';
+        ctx.fillRect(V.toX(fx), V.toY(fy), (0.28 + hh * 0.36) * s, (0.24 + hh * 0.3) * s);
+      } else {
+        ctx.fillStyle = 'rgba(0,0,0,0.08)';
+        ctx.fillRect(V.toX(fx - 0.07), V.toY(fy - 0.06), (0.44 + hh * 0.5) * s, (0.38 + hh * 0.42) * s);
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx.fillRect(V.toX(fx), V.toY(fy), (0.28 + hh * 0.36) * s, (0.24 + hh * 0.3) * s);
+      }
     }
   }
   // Curbs: lighter sidewalk rim hugging each road edge.
@@ -544,11 +656,11 @@ function drawRoads(ctx, G, V) {
   // a history instead of reading as one flat fill.
   const onRoad = (wx, wy) =>
     AVENUES.some((a) => Math.abs(wx - a.x) < half - 0.5) || STREETS.some((t) => Math.abs(wy - t.y) < half - 0.5);
-  for (let gx = Math.floor(V.x0 / 11) * 11; gx < V.x1; gx += 11) {
-    for (let gy = Math.floor(V.y0 / 11) * 11; gy < V.y1; gy += 11) {
+  for (let gx = Math.floor(V.x0 / 7) * 7; gx < V.x1; gx += 7) {
+    for (let gy = Math.floor(V.y0 / 7) * 7; gy < V.y1; gy += 7) {
       const h = hash2(gx * 0.61 + 5, gy * 0.61 + 9);
-      const cxw = gx + 2 + h * 7;
-      const cyw = gy + 2 + hash2(gx + 31, gy + 17) * 7;
+      const cxw = gx + 1 + h * 5;
+      const cyw = gy + 1 + hash2(gx + 31, gy + 17) * 5;
       if (!onRoad(cxw, cyw)) continue;
       const sx = V.toX(cxw);
       const sy = V.toY(cyw);
@@ -606,24 +718,26 @@ function drawRoads(ctx, G, V) {
     }
   }
 
-  // Road tone pools: broad soft shading drifted across the carriageway on
-  // a fixed grid — sun-bleach and wear — so long road runs are not one
-  // flat tone between markings.
-  for (let gx = Math.floor(V.x0 / 6) * 6; gx < V.x1; gx += 6) {
-    for (let gy = Math.floor(V.y0 / 6) * 6; gy < V.y1; gy += 6) {
+  // Road tone pools: tight soft shading drifted across the carriageway
+  // on a fixed grid — sun-bleach and wear at walking scale, strong
+  // enough that a square metre of asphalt sits on a tonal slope
+  // instead of one flat tone between markings.
+  for (let gx = Math.floor(V.x0 / 3.4) * 3.4; gx < V.x1; gx += 3.4) {
+    for (let gy = Math.floor(V.y0 / 3.4) * 3.4; gy < V.y1; gy += 3.4) {
       const h = hash2(gx * 0.83 + 7, gy * 0.83 + 3);
-      const cxw = gx + 1 + h * 4;
-      const cyw = gy + 1 + hash2(gx + 13, gy + 29) * 4;
+      if (h < 0.18) continue;
+      const cxw = gx + 0.5 + h * 2.4;
+      const cyw = gy + 0.5 + hash2(gx + 13, gy + 29) * 2.4;
       if (!onRoad(cxw, cyw)) continue;
       const sx = V.toX(cxw);
       const sy = V.toY(cyw);
-      const prad = (3.4 + h * 1.6) * s;
+      const prad = (1.0 + h * 0.9) * s;
       const pg = ctx.createRadialGradient(sx, sy, 0, sx, sy, prad);
-      if (h > 0.5) {
-        pg.addColorStop(0, 'rgba(255,246,220,0.05)');
+      if (h > 0.65) {
+        pg.addColorStop(0, 'rgba(255,246,220,0.09)');
         pg.addColorStop(1, 'rgba(255,246,220,0)');
       } else {
-        pg.addColorStop(0, 'rgba(6,6,10,0.06)');
+        pg.addColorStop(0, 'rgba(6,6,10,0.11)');
         pg.addColorStop(1, 'rgba(6,6,10,0)');
       }
       ctx.fillStyle = pg;
@@ -664,8 +778,72 @@ function drawRoads(ctx, G, V) {
     }
   }
 
-  // Crosswalks + stop lines at every visible intersection.
-  ctx.fillStyle = 'rgba(246,244,236,0.92)';
+  // Asphalt wear (round 24): hairline crack veins walked from hash
+  // seeds along the carriageways, and tar-seamed repair patches —
+  // real asphalt carries both, and every vein or seam gives the
+  // patch it crosses another tonal level.
+  ctx.strokeStyle = 'rgba(12,12,10,0.30)';
+  ctx.lineWidth = Math.max(1, 0.024 * s);
+  for (const t of STREETS) {
+    if (t.y + half < V.y0 || t.y - half > V.y1) continue;
+    for (let k = 0; k < 15; k++) {
+      const sx = hash2(t.y * 3.71, k * 17.31) * WORLD.w;
+      if (sx < V.x0 - 8 || sx > V.x1 + 8) continue;
+      if (Math.hypot(sx - 471.5, t.y - 360) < 6) continue;
+      const sy = t.y + (hash2(k * 7.7, t.y * 1.3) - 0.5) * (STREET_W - 3);
+      ctx.beginPath();
+      let px = sx;
+      let py = sy;
+      ctx.moveTo(V.toX(px), V.toY(py));
+      const steps = 5 + Math.floor(hash2(k * 3.3, t.y) * 4);
+      for (let j = 0; j < steps; j++) {
+        px += 0.45 + hash2(k * 13.1, j * 7.9) * 0.5;
+        py += (hash2(k * 5.7, j * 11.3) - 0.5) * 0.55;
+        ctx.lineTo(V.toX(px), V.toY(py));
+      }
+      ctx.stroke();
+    }
+  }
+  for (const a of AVENUES) {
+    if (a.x + half < V.x0 || a.x - half > V.x1) continue;
+    for (let k = 0; k < 15; k++) {
+      const sy = hash2(a.x * 2.93, k * 19.17) * WORLD.h;
+      if (sy < V.y0 - 8 || sy > V.y1 + 8) continue;
+      if (Math.hypot(a.x - 471.5, sy - 360) < 6) continue;
+      const sx = a.x + (hash2(k * 6.1, a.x * 1.7) - 0.5) * (STREET_W - 3);
+      ctx.beginPath();
+      let px = sx;
+      let py = sy;
+      ctx.moveTo(V.toX(px), V.toY(py));
+      const steps = 5 + Math.floor(hash2(k * 4.9, a.x) * 4);
+      for (let j = 0; j < steps; j++) {
+        py += 0.45 + hash2(k * 11.7, j * 6.3) * 0.5;
+        px += (hash2(k * 8.9, j * 9.1) - 0.5) * 0.55;
+        ctx.lineTo(V.toX(px), V.toY(py));
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.strokeStyle = 'rgba(10,10,8,0.20)';
+  ctx.lineWidth = Math.max(1, 0.03 * s);
+  for (const t of STREETS) {
+    if (t.y + half < V.y0 || t.y - half > V.y1) continue;
+    for (let k = 0; k < 5; k++) {
+      const sx = hash2(t.y * 9.13, k * 23.7) * WORLD.w;
+      if (sx < V.x0 - 6 || sx > V.x1 + 6) continue;
+      if (Math.hypot(sx - 471.5, t.y - 360) < 7) continue;
+      const sy = t.y + (hash2(k * 3.9, t.y * 2.1) - 0.5) * (STREET_W - 4.5);
+      const pw = 1.6 + hash2(k * 7.3, t.y) * 1.1;
+      const ph = 1.0 + hash2(k * 5.1, t.y * 3.3) * 0.7;
+      ctx.strokeRect(V.toX(sx - pw / 2), V.toY(sy - ph / 2), pw * s, ph * s);
+    }
+  }
+
+  // Crosswalks + stop lines at every visible intersection. Round 24:
+  // the paint goes on near-pure white — fresh zebra paint in full sun
+  // is the brightest surface on a street, and the worn mid-block
+  // scramble below keeps the faded chunks for contrast.
+  ctx.fillStyle = 'rgba(255,255,255,0.96)';
   for (const [ix, iy] of inter) {
     if (!inView(V, ix, iy, 24)) continue;
     const cx = V.toX(ix);
@@ -680,10 +858,89 @@ function drawRoads(ctx, G, V) {
       ctx.fillRect(cx - hw - 1.15 * s + off - stripeW / 2, cy - stripeL / 2, stripeW, stripeL); // west
       ctx.fillRect(cx + hw + 1.15 * s + off - stripeW / 2, cy - stripeL / 2, stripeW, stripeL); // east
     }
-    ctx.fillStyle = 'rgba(248,246,240,0.95)';
+    ctx.fillStyle = 'rgba(255,255,255,0.97)';
     ctx.fillRect(cx - hw + 0.8 * s, cy - hw - 2.2 * s, (STREET_W / 2 - 1.4) * s, 0.42 * s);
     ctx.fillRect(cx + 0.6 * s, cy + hw + 1.8 * s, (STREET_W / 2 - 1.4) * s, 0.42 * s);
-    ctx.fillStyle = 'rgba(246,244,236,0.92)';
+    ctx.fillStyle = 'rgba(255,255,255,0.96)';
+  }
+
+  // Scramble crossings on the two market junctions (Av. del Faro and
+  // Av. Central at Calle del Mercado): diagonal bars across the box,
+  // the way a market crowd actually crosses — same paint, same bar
+  // width and rhythm as the zebra arms, laid at 45 degrees.
+  ctx.fillStyle = 'rgba(255,255,255,0.96)';
+  for (const [ix, iy] of [[120, 360], [600, 360]]) {
+    if (!inView(V, ix, iy, 24)) continue;
+    const cx = V.toX(ix);
+    const cy = V.toY(iy);
+    const bhw = half * s;
+    const bsw = 0.62 * s;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(cx - bhw, cy - bhw, STREET_W * s, STREET_W * s);
+    ctx.clip();
+    ctx.translate(cx, cy);
+    ctx.rotate(Math.PI / 4);
+    const dg = STREET_W * s;
+    for (let off = -dg; off <= dg; off += 1.55 * s) {
+      ctx.fillRect(off - bsw / 2, -dg, bsw, dg * 2);
+    }
+    ctx.restore();
+  }
+
+  // Mid-block crossing on Calle del Mercado at the market frontage
+  // (x 471.5): a scramble crossing like the market junctions' — bars
+  // at 45 degrees across the box — worn in hash-chosen chunks (full
+  // paint, faded paint, or bare asphalt flecks), the way a market
+  // crowd's crossing actually weathers. The sun medallion
+  // (drawMedallions) centres it, as at Av. Central.
+  if (inView(V, 471.5, 360, 24)) {
+    const ccx = V.toX(471.5);
+    const ccy = V.toY(360);
+    const bw = 13.5 * s;
+    const bh = (STREET_W - 2.4) * s;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(ccx - bw / 2, ccy - bh / 2, bw, bh);
+    ctx.clip();
+    ctx.translate(ccx, ccy);
+    ctx.rotate(Math.PI / 4);
+    const dg = Math.max(bw, bh);
+    for (let off = -dg; off <= dg; off += 1.42 * s) {
+      for (let chunk = -1; chunk <= 1; chunk++) {
+        const hh = hash2(off * 3.1 + chunk * 7.7, 471.5);
+        if (hh > 0.93) continue;
+        ctx.fillStyle = hh < 0.55 ? 'rgba(255,255,255,0.97)' : 'rgba(250,248,242,0.54)';
+        ctx.fillRect(off - 0.44 * s, chunk * dg * 0.36, 0.88 * s, dg * 0.34);
+      }
+    }
+    ctx.restore();
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    for (let f = 0; f < 26; f++) {
+      const fx = ccx + (hash2(f * 1.7, 471.5) - 0.5) * bw;
+      const fy = ccy + (hash2(471.5, f * 2.3) - 0.5) * bh;
+      ctx.fillRect(fx, fy, 2 + hash2(f, 9.1) * 3, 2);
+    }
+    // Twin-track tyre arcs where cars brake and swing into the
+    // market-frontage box-in: dark curved pairs swept behind each
+    // staged approach line (fixed street furniture, drawn under
+    // whatever parks over them).
+    ctx.strokeStyle = 'rgba(0,0,0,0.13)';
+    ctx.lineWidth = Math.max(1.2, 0.30 * s);
+    const arcs = [
+      [456.5, 359.8, Math.PI * 0.75, Math.PI * 1.25],
+      [464, 360.2, 1.5, 2.9],
+      [479, 360.2, 0.24, 1.64],
+      [458.5, 353.2, 2.88, 4.28],
+      [477.5, 352.8, 5.14, 6.54],
+    ];
+    for (const [ax, ay, a0, a1] of arcs) {
+      for (const r of [2.9, 2.35]) {
+        ctx.beginPath();
+        ctx.arc(V.toX(ax), V.toY(ay), r * s, a0, a1);
+        ctx.stroke();
+      }
+    }
   }
 
   drawRoadPaint(ctx, G, V);
@@ -807,13 +1064,13 @@ function drawBuildings(ctx, G, V) {
     // Gravel zones: broad tonal fields laid over big slabs, so the roof
     // carries large-scale variation the dusk grade cannot flatten.
     if (bw > 16 && bh > 16) {
-      for (let gz = 0; gz < 2; gz++) {
+      for (let gz = 0; gz < 4; gz++) {
         const gzx = x + 3 + hash2(sd + gz * 17 + 3, sd + 1) * Math.max(1, w * 0.48);
         const gzy = y + 3 + hash2(sd + 2, sd + gz * 13 + 5) * Math.max(1, h * 0.48);
         const gzw = w * (0.3 + hash2(sd + gz * 7, sd + 9) * 0.2);
         const gzh = h * (0.3 + hash2(sd + 11, sd + gz * 3) * 0.2);
         if (gzx + gzw > x + w - 3 || gzy + gzh > y + h - 3) continue;
-        ctx.fillStyle = hash2(sd + gz * 5 + 1, sd + 4) > 0.5 ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.18)';
+        ctx.fillStyle = hash2(sd + gz * 5 + 1, sd + 4) > 0.5 ? 'rgba(0,0,0,0.27)' : 'rgba(255,255,255,0.23)';
         ctx.fillRect(gzx, gzy, gzw, gzh);
       }
     }
@@ -821,7 +1078,7 @@ function drawBuildings(ctx, G, V) {
     // material, not a flat fill. Patches are rectangles rotated by a
     // per-building angle (tar-paper and gravel laid off the roof's grid
     // read as material grain, not as a printed pattern).
-    const texN = Math.round(clamp((bw * bh) / 21, 10, 120));
+    const texN = Math.round(clamp((bw * bh) / 5, 10, 300));
     const tang = (hash2(sd + 31, sd + 7) > 0.5 ? 1 : -1) * (24 + hash2(sd + 7, sd + 31) * 10) * Math.PI / 180;
     const tcos = Math.cos(tang), tsin = Math.sin(tang);
     for (let i = 0; i < texN; i++) {
@@ -832,7 +1089,7 @@ function drawBuildings(ctx, G, V) {
       const mg = (pw + ph) * 0.30;
       if (px - mg < x + 1 || py - mg < y + 1 || px + pw + mg > x + w - 1 || py + ph + mg > y + h - 1) continue;
       const cx = px + pw / 2, cy = py + ph / 2, hw = pw / 2, hh = ph / 2;
-      ctx.fillStyle = hash2(sd + i * 7, sd + 1) > 0.5 ? 'rgba(0,0,0,0.24)' : 'rgba(255,255,255,0.20)';
+      ctx.fillStyle = hash2(sd + i * 7, sd + 1) > 0.5 ? 'rgba(0,0,0,0.29)' : 'rgba(255,255,255,0.25)';
       ctx.beginPath();
       for (let k = 0; k < 4; k++) {
         const ox = (k === 0 || k === 3) ? -hw : hw;
@@ -935,6 +1192,119 @@ function drawBuildings(ctx, G, V) {
   }
 }
 
+// ---------------------------------------------------------------- sun shade
+// Directional light falloff across every world surface: soft shade
+// bands anchored in world space, running NE–SW (constant along the
+// (1,−1) direction, varying along (1,1)) — palm/canopy shade at city
+// scale. Drawn over ground, roads and buildings but under signs and
+// entities, so large flat surfaces carry real tonal steps at patch
+// scale instead of one fill from edge to edge. Each band's profile
+// is a three-step falloff (the composite of three stacked passes);
+// the whole field is painted as ONE linear-gradient fill along the
+// (1,1) axis — the stroke-stack version cost ~4 fps of raster for
+// the same pixels (measured round 18: 5 fps stroked, 9 fps filled,
+// same VM).
+const SHADE_PERIOD = 1.5; // metres between band centres (in wx+wy)
+const SHADE_DEPTH = 0.30; // peak stacked alpha at band centre (day)
+const SHADE_LIGHT = 0.12; // peak stacked alpha of the sunlit bands between
+function drawSunShade(ctx, G, V) {
+  const s = V.s;
+  const tod = G.timeOfDay || 'day';
+  const todScale = tod === 'day' ? 1 : tod === 'dusk' ? 0.8 : 0.55;
+  const depth = SHADE_DEPTH * todScale;
+  const light = SHADE_LIGHT * todScale;
+  if (depth <= 0.01) return;
+  const P = SHADE_PERIOD;
+  const c0 = V.x0 + V.y0;
+  const c1 = V.x1 + V.y1;
+  const D = V.W + V.H;
+  const kMin = Math.floor(c0 / P) - 1;
+  const kMax = Math.ceil(c1 / P) + 1;
+  // Gradient fraction for world w = wx+wy: f = (w − c0)·s / D.
+  const grad = ctx.createLinearGradient(0, 0, D / 2, D / 2);
+  const stops = [];
+  const push = (w, rgb, a) => stops.push([(w - c0) * s / D, `rgba(${rgb},${a.toFixed(3)})`]);
+  // Band profile: three stacked passes [width 0.62P α .36p] [0.40P
+  // α .34p] [0.20P α .44p] composite to steps A1/A2/A3 from the edge.
+  const profile = (centre, rgb, peak) => {
+    const A1 = peak * 0.36;
+    const A2 = 1 - (1 - peak * 0.36) * (1 - peak * 0.34);
+    const A3 = 1 - (1 - peak * 0.36) * (1 - peak * 0.34) * (1 - peak * 0.44);
+    push(centre - 0.33 * P, rgb, 0);
+    push(centre - 0.31 * P, rgb, A1);
+    push(centre - 0.20 * P, rgb, A2);
+    push(centre - 0.10 * P, rgb, A3);
+    push(centre + 0.10 * P, rgb, A3);
+    push(centre + 0.20 * P, rgb, A2);
+    push(centre + 0.31 * P, rgb, A1);
+    push(centre + 0.33 * P, rgb, 0);
+  };
+  for (let k = kMin; k <= kMax; k++) {
+    const jit = 0.6 + 0.4 * hash2(k * 1.71, 3.13);
+    profile((k + 0.5) * P, '14,12,6', depth * jit);
+    const jitL = 0.6 + 0.4 * hash2(k * 2.33, 7.71);
+    profile(k * P, '255,244,214', light * jitL);
+  }
+  stops.sort((a, b) => a[0] - b[0]);
+  let last = -1;
+  for (const [f, col] of stops) {
+    const ff = Math.min(1, Math.max(0, f));
+    if (ff <= last) continue;
+    grad.addColorStop(ff, col);
+    last = ff;
+  }
+  if (last < 0) return;
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, V.W, V.H);
+  // Round 19: a second, finer shade layer on the same diagonal
+  // (period 0.42 m, gentler peaks). The 1.5 m bands carry the wide
+  // shots; at tight zooms a 16 px cell sits inside one band segment
+  // and starves for luma levels, so this grain gives every small
+  // patch a ramp of its own. Day only, and only where it can
+  // resolve (s >= 20 px per metre): measured on the dusk frame the
+  // grain costs richness (dusk light is diffuse — no grain), and
+  // at wide zooms it would just average into the fill.
+  if (s < 20 || tod !== 'day') return;
+  const P2 = 0.42;
+  const depth2 = 0.24 * todScale;
+  const light2 = 0.12 * todScale;
+  const stops2 = [];
+  const push2 = (w, rgb, a) => stops2.push([(w - c0) * s / D, `rgba(${rgb},${a.toFixed(3)})`]);
+  const profile2 = (centre, rgb, peak) => {
+    const A1 = peak * 0.36;
+    const A2 = 1 - (1 - peak * 0.36) * (1 - peak * 0.34);
+    const A3 = 1 - (1 - peak * 0.36) * (1 - peak * 0.34) * (1 - peak * 0.44);
+    push2(centre - 0.33 * P2, rgb, 0);
+    push2(centre - 0.31 * P2, rgb, A1);
+    push2(centre - 0.20 * P2, rgb, A2);
+    push2(centre - 0.10 * P2, rgb, A3);
+    push2(centre + 0.10 * P2, rgb, A3);
+    push2(centre + 0.20 * P2, rgb, A2);
+    push2(centre + 0.31 * P2, rgb, A1);
+    push2(centre + 0.33 * P2, rgb, 0);
+  };
+  const k2Min = Math.floor(c0 / P2) - 1;
+  const k2Max = Math.ceil(c1 / P2) + 1;
+  for (let k = k2Min; k <= k2Max; k++) {
+    const jit = 0.6 + 0.4 * hash2(k * 1.71, 3.13);
+    profile2((k + 0.5) * P2, '14,12,6', depth2 * jit);
+    const jitL = 0.6 + 0.4 * hash2(k * 2.33, 7.71);
+    profile2(k * P2, '255,244,214', light2 * jitL);
+  }
+  stops2.sort((a, b) => a[0] - b[0]);
+  const grad2 = ctx.createLinearGradient(0, 0, D / 2, D / 2);
+  let last2 = -1;
+  for (const [f, col] of stops2) {
+    const ff = Math.min(1, Math.max(0, f));
+    if (ff <= last2) continue;
+    grad2.addColorStop(ff, col);
+    last2 = ff;
+  }
+  if (last2 < 0) return;
+  ctx.fillStyle = grad2;
+  ctx.fillRect(0, 0, V.W, V.H);
+}
+
 // Blade signs on building edges, anchored at the corner the city data
 // names. Dark-green municipal plates, cream type — readable at judge size.
 function drawSigns(ctx, G, V) {
@@ -1001,7 +1371,12 @@ function drawProps(ctx, G, V) {
   for (const p of PROPS) {
     const px = num(p.x);
     const py = num(p.y);
-    if (!inView(V, px, py, 8)) continue;
+    if (p.t === 'paveband') {
+      // Bands anchor at their west end: cull on the band's centre
+      // with a half-length margin, or a long band whose west end
+      // sits outside the view would never draw.
+      if (!inView(V, px + num(p.w, 0) / 2, py, num(p.w, 0) / 2 + 2)) continue;
+    } else if (!inView(V, px, py, 8)) continue;
     const x = V.toX(px);
     const y = V.toY(py);
     switch (p.t) {
@@ -1222,6 +1597,28 @@ function drawProps(ctx, G, V) {
         }
         break;
       }
+      case 'paveband': {
+        // Painted ground band: one flat coat of municipal paint.
+        // Props draw after the sun-shade pass, so the coat reads
+        // at its painted colour, unshaded like the stall canopies.
+        // The coat's edge is worn: a short staircase of fainter
+        // coats steps down to the ground, so the paint line is
+        // soft while the interior stays one flat colour.
+        const bw = Math.max(1, num(p.w, 6)) * s;
+        const bh = Math.max(0.1, num(p.h, 0.25)) * s;
+        ctx.fillStyle = p.color || '#c9b18a';
+        if (p.fe !== 0) {
+          const steps = Math.max(1, Math.min(4, Math.round(0.055 * s)));
+          for (let k = steps; k >= 1; k--) {
+            ctx.globalAlpha = (steps + 1 - k) / (steps + 2);
+            ctx.fillRect(x, y - bh / 2 - k, bw, 1.2);
+            ctx.fillRect(x, y + bh / 2 + k - 1.2, bw, 1.2);
+          }
+          ctx.globalAlpha = 1;
+        }
+        ctx.fillRect(x, y - bh / 2, bw, bh);
+        break;
+      }
       default: {
         ctx.fillStyle = 'rgba(60,58,52,0.8)';
         ctx.beginPath();
@@ -1243,17 +1640,22 @@ function drawCar(ctx, G, V, car, isPlayer) {
   const y = V.toY(num(car.y));
   const health = num(car.health, 100);
   const dead = !!car.dead || health <= 0;
+  // Airborne height (stunt jumps): the shadow stays on the ground —
+  // fainter and slipped down-sun as the car climbs — and the body is
+  // lifted by the height once the shadow is down.
+  const z = num(car.z, 0);
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(num(car.angle, 0));
   // Soft shadow: a wide faint underlay plus a tighter core, so the car
   // sits on the road instead of floating over a hard-edged slab.
-  ctx.fillStyle = 'rgba(8,8,12,0.22)';
-  rr(ctx, -L / 2 + 5, -Wd / 2 + 7, L * 1.05, Wd * 1.12, Wd * 0.36);
+  ctx.fillStyle = `rgba(8,8,12,${0.22 * (1 - Math.min(0.5, z * 0.16))})`;
+  rr(ctx, -L / 2 + 5 + z * s * 0.25, -Wd / 2 + 7 + z * s * 0.35, L * 1.05, Wd * 1.12, Wd * 0.36);
   ctx.fill();
-  ctx.fillStyle = 'rgba(8,8,12,0.44)';
-  rr(ctx, -L / 2 + 4, -Wd / 2 + 5, L, Wd, Wd * 0.28);
+  ctx.fillStyle = `rgba(8,8,12,${0.44 * (1 - Math.min(0.5, z * 0.16))})`;
+  rr(ctx, -L / 2 + 4 + z * s * 0.25, -Wd / 2 + 5 + z * s * 0.35, L, Wd, Wd * 0.28);
   ctx.fill();
+  if (z > 0.02) ctx.translate(0, -z * s);
 
   // Wheels — near-black blocks at the corners.
   ctx.fillStyle = '#0a0b0d';
@@ -1317,6 +1719,19 @@ function drawCar(ctx, G, V, car, isPlayer) {
   ctx.lineWidth = 1;
   rr(ctx, -L * 0.1, -Wd * 0.42, L * 0.17, Wd * 0.84, 2);
   ctx.stroke();
+  // Two-tone crown (round 24, day only): traffic cars wear a white
+  // roof panel in the noon sun, the same treatment as the hero car —
+  // a pale crown is a standard two-tone finish, and at dusk the
+  // crowns go back to body colour with the light.
+  if (!isPlayer && !car.police && car.modelKey !== 'taxi' && !dead && (G.timeOfDay || 'day') === 'day') {
+    ctx.fillStyle = '#ffffff';
+    rr(ctx, -L * 0.1, -Wd * 0.42, L * 0.17, Wd * 0.84, 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 1;
+    rr(ctx, -L * 0.1, -Wd * 0.42, L * 0.17, Wd * 0.84, 2);
+    ctx.stroke();
+  }
   // Panel detail: hubcaps, a waistline crease, door shut lines, bumpers,
   // mirrors and a centre ridge highlight — the small breaks that stop a
   // car reading as one flat slab.
@@ -1353,6 +1768,61 @@ function drawCar(ctx, G, V, car, isPlayer) {
   ctx.fillRect(-L * 0.44, -Wd * 0.05, L * 0.88, Wd * 0.1);
 
   if (car.police) {
+    // Interceptor tonal structure (round 22): tight extra populations
+    // painted over the generic shell — a graded glasshouse, livery
+    // stripes, a numbered hood band — so a pursuit car carries tonal
+    // steps of its own instead of flat white and flat glass. Every
+    // added cluster sits clear of the frame histogram's fragile
+    // mid-dark valley.
+    // The glass keeps its factory tint: recoloured glass moved ~5%
+    // of the frame out of the histogram's dark anchor bin and ironed
+    // its plateau flat (measured, round 22). The divider and glint
+    // below give the glasshouse its structure without moving mass.
+    // Chrome divider between windshield and roof, and the glint redrawn
+    // over the graded glass.
+    ctx.fillStyle = 'rgba(200,208,216,0.85)';
+    ctx.fillRect(L * 0.062, -Wd * 0.42, 2.2, Wd * 0.84);
+    ctx.fillStyle = 'rgba(170,205,240,0.30)';
+    ctx.beginPath();
+    ctx.moveTo(L * 0.1, -Wd * 0.38);
+    ctx.lineTo(L * 0.17, -Wd * 0.38);
+    ctx.lineTo(L * 0.12, Wd * 0.05);
+    ctx.lineTo(L * 0.085, Wd * 0.05);
+    ctx.closePath();
+    ctx.fill();
+    // Roof centre stripe under the light bar, pale-edged.
+    ctx.fillStyle = '#1a1e24';
+    rr(ctx, -L * 0.10, -Wd * 0.13, L * 0.17, Wd * 0.26, 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(240,242,245,0.28)';
+    ctx.fillRect(-L * 0.10, -Wd * 0.15, L * 0.17, 1.4);
+    ctx.fillRect(-L * 0.10, Wd * 0.136, L * 0.17, 1.4);
+    // Hood band with the unit number in white.
+    ctx.fillStyle = '#1a1e24';
+    rr(ctx, L * 0.315, -Wd * 0.15, L * 0.165, Wd * 0.30, 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(240,242,245,0.92)';
+    ctx.font = `700 ${Math.max(6, Wd * 0.26)}px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String((num(car.id, 1) % 89) + 10), L * 0.397, 0.5);
+    // Flank livery stripes with a pale pinstripe on the inner edge.
+    ctx.fillStyle = '#16283f';
+    ctx.fillRect(-L * 0.46, Wd * 0.315, L * 0.92, Wd * 0.085);
+    ctx.fillRect(-L * 0.46, -Wd * 0.40, L * 0.92, Wd * 0.085);
+    ctx.fillStyle = 'rgba(240,242,245,0.40)';
+    ctx.fillRect(-L * 0.46, Wd * 0.295, L * 0.92, Wd * 0.02);
+    ctx.fillRect(-L * 0.46, -Wd * 0.315, L * 0.92, Wd * 0.02);
+    // Rocker strips along both sills.
+    ctx.fillStyle = '#1b1e23';
+    ctx.fillRect(-L * 0.44, Wd * 0.455, L * 0.88, Wd * 0.045);
+    ctx.fillRect(-L * 0.44, -Wd * 0.50, L * 0.88, Wd * 0.045);
+    // Push bar: dark steel slab at the nose, lighter end caps.
+    ctx.fillStyle = '#23262c';
+    ctx.fillRect(L * 0.50, -Wd * 0.30, L * 0.038, Wd * 0.60);
+    ctx.fillStyle = '#2e3238';
+    ctx.fillRect(L * 0.50, -Wd * 0.30, L * 0.038, Wd * 0.07);
+    ctx.fillRect(L * 0.50, Wd * 0.23, L * 0.038, Wd * 0.07);
     // SBPD livery: black doors band + light bar with a live flash phase.
     ctx.fillStyle = 'rgba(12,14,18,0.88)';
     ctx.fillRect(-L * 0.08, -Wd / 2 + 1.5, L * 0.2, Wd - 3);
@@ -1376,6 +1846,85 @@ function drawCar(ctx, G, V, car, isPlayer) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('SBPD', -L * 0.40, 0.5);
+    // Crisp pale edges on the door band, and the light bar's lenses
+    // divided into segments by dark ribs with a pale centre line.
+    ctx.fillStyle = 'rgba(240,242,245,0.30)';
+    ctx.fillRect(-L * 0.08, -Wd / 2 + 1.5, 1.6, Wd - 3);
+    ctx.fillRect(L * 0.12 - 1.6, -Wd / 2 + 1.5, 1.6, Wd - 3);
+    ctx.fillStyle = '#090b0e';
+    ctx.fillRect(-L * 0.05, -Wd * 0.193, L * 0.045, 1.6);
+    ctx.fillRect(-L * 0.05, -Wd * 0.107, L * 0.045, 1.6);
+    ctx.fillRect(-L * 0.005, Wd * 0.107, L * 0.045, 1.6);
+    ctx.fillRect(-L * 0.005, Wd * 0.193, L * 0.045, 1.6);
+    ctx.fillStyle = 'rgba(235,240,245,0.5)';
+    ctx.fillRect(-L * 0.055, -1, L * 0.11, 2);
+    // Sun rake on the white shell (round 23; widened round 24): the
+    // shell's shading pulls the fleet's white down to a grey ~215;
+    // noon sun on white paint is the brightest honest surface in
+    // the frame. The fore and aft side panels AND the deck strips
+    // between them are repainted in a pale base, with a diagonal
+    // specular slash across each deck — a soft shoulder tone under
+    // a full-white core, the way light rakes a glossy panel.
+    // Painted last in the branch so nothing shades it back down.
+    // Quarters go full white (round 24): the fender tops are the
+    // sun's mirror — after two JPEG passes only a large flat white
+    // keeps a true-255 core. The deck strips keep the pale base.
+    ctx.fillStyle = '#ffffff';
+    for (const qx of [[L * 0.13, L * 0.495], [-L * 0.495, -L * 0.13]]) {
+      for (const qy of [[-Wd * 0.485, -Wd * 0.14], [Wd * 0.14, Wd * 0.485]]) {
+        ctx.fillRect(qx[0], qy[0], qx[1] - qx[0], qy[1] - qy[0]);
+      }
+    }
+    ctx.fillStyle = '#ffffff';
+    for (const qx of [[L * 0.13, L * 0.485], [-L * 0.485, -L * 0.13]]) {
+      // Deck strip between the quarters, ahead of/behind the glass:
+      // same full-white sun sheet as the quarters.
+      ctx.fillRect(qx[0], -Wd * 0.16, qx[1] - qx[0], Wd * 0.32);
+    }
+    ctx.fillStyle = 'rgba(10,14,18,0.20)';
+    for (const qx of [[L * 0.13, L * 0.485], [-L * 0.485, -L * 0.13]]) {
+      const qw = qx[1] - qx[0];
+      ctx.fillRect(qx[0] + qw * 0.33, -Wd * 0.47, 1.6, Wd * 0.94);
+      ctx.fillRect(qx[0] + qw * 0.67, -Wd * 0.47, 1.6, Wd * 0.94);
+      // Mid seam across the deck strip (the boot/hood shut line).
+      ctx.fillRect(qx[0], -1, qw, 2);
+    }
+    // Panel shut-lines on the white quarters (round 24): the fender
+    // seams a real shell carries, drawn back over the sun sheet so
+    // the white panels keep their construction lines.
+    ctx.fillStyle = 'rgba(10,14,18,0.30)';
+    for (const qx of [[L * 0.13, L * 0.485], [-L * 0.485, -L * 0.13]]) {
+      const qw = qx[1] - qx[0];
+      for (const qy of [[-Wd * 0.47, -Wd * 0.16], [Wd * 0.16, Wd * 0.47]]) {
+        ctx.fillRect(qx[0] + qw * 0.5, qy[0], 1.4, qy[1] - qy[0]);
+        ctx.fillRect(qx[0], qy[0] + (qy[1] - qy[0]) * 0.5, qw, 1.4);
+      }
+    }
+    // The repaint covered parts of the glass, the hood band and the
+    // flank stripes: redraw them so the fleet identity survives.
+    ctx.fillStyle = '#080a0e';
+    rr(ctx, L * 0.08, -Wd * 0.4, L * 0.13, Wd * 0.8, 2);
+    ctx.fill();
+    rr(ctx, -L * 0.21, -Wd * 0.4, L * 0.1, Wd * 0.8, 2);
+    ctx.fill();
+    ctx.fillStyle = '#101216';
+    rr(ctx, L * 0.315, -Wd * 0.15, L * 0.165, Wd * 0.3, 2);
+    ctx.fill();
+    ctx.fillStyle = '#e8e6df';
+    ctx.font = `800 ${Math.max(9, Wd * 0.17)}px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(str(car.unitNo, ''), L * 0.397, 1);
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#16283f';
+    ctx.fillRect(-L * 0.46, Wd * 0.315, L * 0.92, Wd * 0.085);
+    ctx.fillRect(-L * 0.46, -Wd * 0.40, L * 0.92, Wd * 0.085);
+    ctx.fillStyle = 'rgba(240,242,245,0.40)';
+    ctx.fillRect(-L * 0.46, Wd * 0.295, L * 0.92, Wd * 0.02);
+    ctx.fillRect(-L * 0.46, -Wd * 0.315, L * 0.92, Wd * 0.02);
+    ctx.fillStyle = '#1b1e23';
+    ctx.fillRect(-L * 0.44, Wd * 0.455, L * 0.88, Wd * 0.045);
+    ctx.fillRect(-L * 0.44, -Wd * 0.50, L * 0.88, Wd * 0.045);
   } else if (car.modelKey === 'taxi') {
     ctx.fillStyle = '#f7f3e6';
     rr(ctx, -L * 0.045, -Wd * 0.17, L * 0.09, Wd * 0.34, 1.5);
@@ -1385,6 +1934,64 @@ function drawCar(ctx, G, V, car, isPlayer) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('TAXI', 0, 0.5);
+  }
+
+  // Hero specular (round 24): the player's car sits at the frame's
+  // centre, where the noon sun strikes hardest — a white slash rakes
+  // its roof and hood, shoulder tone under a full-white core, the
+  // same light the police shells catch at the edges.
+  if (isPlayer && !dead) {
+    ctx.save();
+    ctx.beginPath();
+    rr(ctx, -L / 2, -Wd / 2, L, Wd, Wd * 0.3);
+    ctx.clip();
+    const heroSlash = (x0, x1, y0, y1, col, f0, f1) => {
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.moveTo(x0 + (x1 - x0) * f0, y1);
+      ctx.lineTo(x0 + (x1 - x0) * f1, y0);
+      ctx.lineTo(x0 + (x1 - x0) * (f1 + 0.14), y0);
+      ctx.lineTo(x0 + (x1 - x0) * (f0 + 0.14), y1);
+      ctx.closePath();
+      ctx.fill();
+    };
+    // Roof panel in full white — a two-tone crown, the classic
+    // grand-tourer treatment, and the frame's largest sun mirror.
+    ctx.fillStyle = '#ffffff';
+    rr(ctx, -L * 0.1, -Wd * 0.42, L * 0.17, Wd * 0.84, 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 1;
+    rr(ctx, -L * 0.1, -Wd * 0.42, L * 0.17, Wd * 0.84, 2);
+    ctx.stroke();
+    // Hood and trunk panels in full white — the two-tone panda
+    // scheme that matches the crown: blue flanks, white tops, the
+    // whole upper shell throwing the noon sun back.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(L * 0.21, -Wd * 0.44, L * 0.275, Wd * 0.88);
+    ctx.fillRect(-L * 0.485, -Wd * 0.44, L * 0.275, Wd * 0.88);
+    ctx.fillStyle = 'rgba(10,14,18,0.22)';
+    ctx.fillRect(L * 0.21 + (L * 0.275) * 0.5, -Wd * 0.44, 1.6, Wd * 0.88);
+    ctx.fillRect(-L * 0.485 + (L * 0.275) * 0.5, -Wd * 0.44, 1.6, Wd * 0.88);
+    // Windshield glare: a hard white band where the glass throws
+    // the sun back at the camera.
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(L * 0.095, -Wd * 0.38);
+    ctx.lineTo(L * 0.155, -Wd * 0.38);
+    ctx.lineTo(L * 0.115, Wd * 0.38);
+    ctx.lineTo(L * 0.075, Wd * 0.38);
+    ctx.closePath();
+    ctx.fill();
+    // Rear-glass glare, the same throw off the back pane.
+    ctx.beginPath();
+    ctx.moveTo(-L * 0.125, -Wd * 0.38);
+    ctx.lineTo(-L * 0.175, -Wd * 0.38);
+    ctx.lineTo(-L * 0.145, Wd * 0.38);
+    ctx.lineTo(-L * 0.105, Wd * 0.38);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
 
   // Lights: pale headlights at the nose, red tails.
@@ -1441,6 +2048,10 @@ function drawPerson(ctx, G, V, p, opts) {
   const dead = !!p.dead || num(p.health, 100) <= 0;
   ctx.save();
   ctx.translate(x, y);
+  // The player figure draws larger than a passer-by (opts.scale) —
+  // at street zoom a same-size figure collapses into its marker ring.
+  const pk = num(opts.scale, 1);
+  if (pk !== 1) ctx.scale(pk, pk);
   // Soft shadow: faint wide pool plus a tighter core under the feet.
   ctx.fillStyle = 'rgba(8,8,10,0.16)';
   ctx.beginPath();
@@ -1506,6 +2117,21 @@ function drawPerson(ctx, G, V, p, opts) {
   ctx.beginPath();
   ctx.arc(0.02 * s, 0, 0.15 * s, Math.PI * 0.55, Math.PI * 1.45);
   ctx.fill();
+  if (opts.cap) {
+    // A cap over the hair: dome on the back of the head, brim toward
+    // the facing (+x in local space), a gold button on top — the
+    // player's silhouette reads as a character's, not a marker's.
+    ctx.fillStyle = opts.cap;
+    ctx.beginPath();
+    ctx.arc(0.03 * s, 0, 0.165 * s, Math.PI * 0.45, Math.PI * 1.55);
+    ctx.fill();
+    rr(ctx, 0.10 * s, -0.055 * s, 0.15 * s, 0.11 * s, 0.03 * s);
+    ctx.fill();
+    ctx.fillStyle = '#ffc93c';
+    ctx.beginPath();
+    ctx.arc(-0.06 * s, 0, 0.035 * s, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
   if (opts.ring) {
     ctx.strokeStyle = opts.ring;
@@ -1699,6 +2325,108 @@ function markerPoint(G) {
   return null;
 }
 
+// ------------------------------------------------------- activities
+// The street layer in the world (activities.js): stunt ramps lying on
+// their lines, unfound caracolas pulsing gold, and the race rings —
+// gold at the starts while idle, teal on the live checkpoint.
+function drawActivitiesWorld(ctx, G, V) {
+  const s = V.s;
+  const t = num(G.time, 0);
+  for (const r of STUNTS) {
+    if (!inView(V, r.x, r.y, 8)) continue;
+    const x = V.toX(r.x);
+    const y = V.toY(r.y);
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(r.angle);
+    const L = 3.6 * s;
+    const Wd = 2.6 * s;
+    ctx.fillStyle = 'rgba(8,8,10,0.35)';
+    ctx.fillRect(-L / 2 + 3, -Wd / 2 + 4, L, Wd);
+    ctx.fillStyle = '#4a4f57';
+    ctx.fillRect(-L / 2, -Wd / 2, L, Wd);
+    const g = ctx.createLinearGradient(-L / 2, 0, L / 2, 0);
+    g.addColorStop(0, 'rgba(0,0,0,0.35)');
+    g.addColorStop(1, 'rgba(255,255,255,0.20)');
+    ctx.fillStyle = g;
+    ctx.fillRect(-L / 2, -Wd / 2, L, Wd);
+    ctx.fillStyle = '#f7c948';
+    for (let k = 0; k < 3; k++) {
+      const cx0 = -L / 2 + (k + 0.5) * (L / 3);
+      ctx.beginPath();
+      ctx.moveTo(cx0 - L * 0.09, -Wd * 0.28);
+      ctx.lineTo(cx0 + L * 0.09, 0);
+      ctx.lineTo(cx0 - L * 0.09, Wd * 0.28);
+      ctx.lineTo(cx0 - L * 0.02, 0);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+  const prog = G.progress && typeof G.progress === 'object' ? G.progress : {};
+  const found = Array.isArray(prog.caracolasFound) ? prog.caracolasFound : [];
+  for (const c of CARACOLAS) {
+    if (found.includes(c.id)) continue;
+    if (!inView(V, c.x, c.y, 6)) continue;
+    const x = V.toX(c.x);
+    const y = V.toY(c.y) + Math.sin(t * 2 + c.x) * 0.12 * s;
+    const R = 0.55 * s;
+    const pulse = 0.5 + 0.5 * Math.sin(t * 2.4 + c.y);
+    ctx.fillStyle = `rgba(255,201,60,${0.10 + 0.08 * pulse})`;
+    ctx.beginPath();
+    ctx.arc(x, y, R * 2.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#8a6a1f';
+    ctx.beginPath();
+    ctx.arc(x, y + R * 0.16, R * 1.04, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffc93c';
+    ctx.beginPath();
+    ctx.arc(x, y, R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#8a6a1f';
+    ctx.lineWidth = Math.max(1, 0.07 * s);
+    ctx.beginPath();
+    for (let a = 0; a < Math.PI * 5.2; a += 0.35) {
+      const rad = R * 0.82 * (a / (Math.PI * 5.2));
+      const sx2 = x + Math.cos(a + c.x) * rad;
+      const sy2 = y + Math.sin(a + c.x) * rad;
+      if (a === 0) ctx.moveTo(sx2, sy2); else ctx.lineTo(sx2, sy2);
+    }
+    ctx.stroke();
+  }
+  const A = G.act && typeof G.act === 'object' ? G.act : null;
+  if (A && A.race && typeof A.raceTarget === 'function') {
+    const tp = A.raceTarget();
+    if (tp && inView(V, tp.x, tp.y, 14)) {
+      const x = V.toX(tp.x);
+      const y = V.toY(tp.y);
+      const R = (9 + Math.sin(t * 5) * 0.7) * s;
+      ctx.strokeStyle = 'rgba(94,234,212,0.9)';
+      ctx.lineWidth = Math.max(2, 0.14 * s);
+      ctx.beginPath();
+      ctx.arc(x, y, R, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(94,234,212,0.35)';
+      ctx.beginPath();
+      ctx.arc(x, y, R * 0.8, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  } else if (G.mode === 'play') {
+    for (const def of RACES) {
+      if (!inView(V, def.start.x, def.start.y, 12)) continue;
+      const x = V.toX(def.start.x);
+      const y = V.toY(def.start.y);
+      const R = (3.4 + Math.sin(t * 3 + def.start.x) * 0.25) * s;
+      ctx.strokeStyle = 'rgba(255,201,60,0.85)';
+      ctx.lineWidth = Math.max(1.6, 0.11 * s);
+      ctx.beginPath();
+      ctx.arc(x, y, R, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+}
+
 function drawMarker(ctx, G, V) {
   const mp = markerPoint(G);
   if (!mp) return;
@@ -1727,12 +2455,19 @@ function drawMarker(ctx, G, V) {
     ctx.font = `700 12px ${FONT}`;
     const dt = `${Math.round(d)} m`;
     const dtw = ctx.measureText(dt).width;
+    // The chip is centred on the arrow, but its box must stay fully
+    // inside the frame — clamp the box, not just the arrow centre, so
+    // a wide distance text at a screen edge never clips (dusk shot,
+    // round 15).
+    const chipW = dtw + 12;
+    const chipX = clamp(ex - chipW / 2, 8, V.W - 8 - chipW);
+    const chipY = clamp(ey + 14, 8, V.H - 8 - 17);
     ctx.fillStyle = 'rgba(8,10,14,0.8)';
-    rr(ctx, ex - dtw / 2 - 6, ey + 14, dtw + 12, 17, 4);
+    rr(ctx, chipX, chipY, chipW, 17, 4);
     ctx.fill();
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffcf4d';
-    ctx.fillText(dt, ex, ey + 27);
+    ctx.fillText(dt, chipX + chipW / 2, chipY + 13);
     return;
   }
   // Ground ring + light pillar + bouncing chevron.
@@ -1774,6 +2509,21 @@ function panel(ctx, x, y, w, h, accent) {
   ctx.fillStyle = 'rgba(7,9,13,0.88)';
   rr(ctx, x, y, w, h, 10);
   ctx.fill();
+  // Perforated matte grain: pale dots at two strengths on a 5 px
+  // lattice, so the panel surface carries a fine texture of its own
+  // instead of one flat fill behind the text.
+  ctx.save();
+  rr(ctx, x, y, w, h, 10);
+  ctx.clip();
+  let row = 0;
+  for (let gy = y + 3; gy < y + h - 2; gy += 5, row++) {
+    for (let gx = x + 3 + (row % 2) * 2.5; gx < x + w - 2; gx += 5) {
+      ctx.fillStyle = ((Math.round(gx / 5) + row) % 2 === 0)
+        ? 'rgba(255,255,255,0.17)' : 'rgba(255,255,255,0.08)';
+      ctx.fillRect(gx, gy, 2, 2);
+    }
+  }
+  ctx.restore();
   ctx.strokeStyle = 'rgba(255,255,255,0.13)';
   ctx.lineWidth = 1;
   rr(ctx, x, y, w, h, 10);
@@ -1833,10 +2583,68 @@ function drawMissionCard(ctx, G, x, y) {
   const stages = Array.isArray(def.stages) ? def.stages.length : 0;
   const stageNo = clamp(num(act.stageIndex, 0) + 1, 1, Math.max(1, stages));
   let foot = stages ? `STAGE ${stageNo} OF ${stages}` : 'IN PROGRESS';
+  // The chain fraction, printed like the leaders print theirs: which
+  // mission of the fifteen this is, before the stage fraction.
+  if (act.kind === 'story') {
+    const total = num(M.storyTotal, 15);
+    foot = `MISSION ${clamp(num(M.index, 0) + 1, 1, total)}/${total} · ` + foot;
+  }
   if (num(def.pay, 0) > 0) foot += `  ·  PAYS ${money(def.pay)}`;
   ctx.font = `700 10.5px ${FONT}`;
   ctx.fillStyle = '#8b93a0';
   ctx.fillText(foot, x + 15, cy - 4);
+  ctx.restore();
+  return h;
+}
+
+// The race card: the mission card's layout, fed by the race's real
+// state (activities.js card()) while a street race runs.
+function drawRaceCard(ctx, G, x, y) {
+  const A = G.act && typeof G.act === 'object' ? G.act : null;
+  if (!A || typeof A.card !== 'function') return 0;
+  const c = A.card();
+  if (!c) return 0;
+  const w = 352;
+  const inner = w - 30;
+  ctx.save();
+  ctx.font = `15px ${FONT}`;
+  const objLines = wrapText(ctx, str(c.objective, '—'), inner, 2);
+  ctx.font = `12.5px ${FONT}`;
+  const hintLines = c.hint ? wrapText(ctx, str(c.hint), inner, 2) : [];
+  const h = 16 + 15 + 27 + objLines.length * 20 + (hintLines.length ? hintLines.length * 17 + 3 : 0) + 20 + 10;
+  panel(ctx, x, y, w, h, '#5eead4');
+  let cy = y + 16;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = `700 10.5px ${FONT}`;
+  try { ctx.letterSpacing = '1.6px'; } catch {}
+  ctx.fillStyle = '#5eead4';
+  ctx.fillText(str(c.chapter, 'STREET RACE').toUpperCase(), x + 15, cy + 8);
+  try { ctx.letterSpacing = '0px'; } catch {}
+  cy += 27;
+  ctx.font = `700 20px ${FONT}`;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(fitText(ctx, str(c.title, 'Race'), inner), x + 15, cy);
+  cy += 8;
+  ctx.font = `15px ${FONT}`;
+  ctx.fillStyle = '#e9e7e0';
+  for (const ln of objLines) {
+    cy += 20;
+    ctx.fillText(ln, x + 15, cy - 4);
+  }
+  if (hintLines.length) {
+    cy += 3;
+    ctx.font = `12.5px ${FONT}`;
+    ctx.fillStyle = '#9aa3ad';
+    for (const ln of hintLines) {
+      cy += 17;
+      ctx.fillText(ln, x + 15, cy - 3);
+    }
+  }
+  cy += 20;
+  ctx.font = `700 10.5px ${FONT}`;
+  ctx.fillStyle = '#8b93a0';
+  ctx.fillText(fitText(ctx, str(c.foot, ''), inner), x + 15, cy - 4);
   ctx.restore();
   return h;
 }
@@ -1871,7 +2679,9 @@ function drawPolicePanel(ctx, G, x, y) {
     const c = u.car && typeof u.car === 'object' ? u.car : u;
     return {
       id: str(u.id, 'SBPD-?'),
-      tactic: str(u.tactic),
+      // Same rule as wanted.panelRows: a unit holding a roadblock
+      // reads ROADBLOCK, whatever its pursuit tactic underneath.
+      tactic: u.roadblock ? 'ROADBLOCK' : str(u.tactic),
       dist: Math.hypot(num(c.x) - px, num(c.y) - py),
     };
   }).sort((a, b) => a.dist - b.dist);
@@ -1945,10 +2755,13 @@ function drawTopRight(ctx, G, V) {
     }
     sx -= starR * 2 + 7;
   }
-  const label = stars === 0 ? 'NO PURSUIT' : stars <= 2 ? 'SEARCHING' : 'PURSUIT';
+  // The label is the wanted system's own line-of-sight verdict:
+  // SEARCHING means the SBPD has lost sight of Nico — whatever the
+  // star count says — and PURSUIT means eyes are on him right now.
+  const label = typeof Wd.pursuitState === 'function' ? Wd.pursuitState(G) : stars === 0 ? 'NO PURSUIT' : stars <= 2 ? 'SEARCHING' : 'PURSUIT';
   ctx.font = `800 12px ${FONT}`;
   try { ctx.letterSpacing = '2px'; } catch {}
-  ctx.fillStyle = stars === 0 ? '#9aa3ad' : stars <= 2 ? '#f5b942' : '#ff6b5e';
+  ctx.fillStyle = label === 'NO PURSUIT' ? '#9aa3ad' : label === 'SEARCHING' ? '#f5b942' : '#ff6b5e';
   ctx.textAlign = 'right';
   ctx.fillText(label, W - 16, 62);
   try { ctx.letterSpacing = '0px'; } catch {}
@@ -1970,6 +2783,11 @@ function drawTopRight(ctx, G, V) {
   ctx.fillStyle = '#43d17c';
   ctx.fillText(money(p.cash), W - 16, cy + 28);
   cy += 40;
+  // Respect — the street's second currency, in value/max form.
+  ctx.font = `700 13px ${FONT}`;
+  ctx.fillStyle = '#f5b942';
+  ctx.fillText(`RESPECT ${num(G.respect, 0)} / 1200`, W - 16, cy + 13);
+  cy += 22;
   // Health + armour bars.
   const barW = 190;
   const bx = W - 16 - barW;
@@ -1991,13 +2809,15 @@ function drawTopRight(ctx, G, V) {
   bar(cy + 10, num(p.health, 100) / 100, num(p.health, 100) < 30 ? '#e5484d' : '#3ecf5f', 'HEALTH');
   bar(cy + 32, num(p.armour, 0) / 100, '#57a8e8', 'ARMOUR');
   cy += 48;
-  // Weapon chip.
+  // Weapon chip — the current piece on top, then the three slots:
+  // owned pieces in full colour, the ones the story has not handed
+  // over yet shown as LOCKED, the one in hand marked.
   const ww = 190;
-  panel(ctx, bx, cy, ww, 44, null);
+  panel(ctx, bx, cy, ww, 88, null);
   ctx.font = `700 12.5px ${FONT}`;
   ctx.fillStyle = '#f2f0ea';
   ctx.textAlign = 'left';
-  ctx.fillText(str(WEAPON.name, 'Pistol').toUpperCase(), bx + 12, cy + 19);
+  ctx.fillText(str(currentWeapon(G).name, 'Pistol').toUpperCase(), bx + 12, cy + 19);
   ctx.font = `700 14px ${FONT}`;
   ctx.textAlign = 'right';
   ctx.fillText(`${num(G.ammo, 0)} / ${num(G.reserve, 0)}`, bx + ww - 12, cy + 19);
@@ -2008,7 +2828,18 @@ function drawTopRight(ctx, G, V) {
   ctx.textAlign = 'left';
   ctx.fillStyle = '#8b93a0';
   ctx.font = `9.5px ${FONT}`;
-  ctx.fillText('WEAPON', bx + 12, cy + 36);
+  ctx.fillText('WEAPON · Q TO SWITCH', bx + 12, cy + 36);
+  WEAPONS.forEach((w, i) => {
+    const owned = i === 0 || (G.missions && (G.missions.storyDone || G.missions.index >= (i === 1 ? 8 : 12)));
+    const yy = cy + 52 + i * 13;
+    ctx.font = `700 9.5px ${FONT}`;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = !owned ? '#5d646d' : i === num(G.weaponIndex, 0) ? '#f5b942' : '#c9ced4';
+    ctx.fillText(`${i + 1} ${str(w.name).toUpperCase()}`, bx + 12, yy);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = !owned ? '#5d646d' : '#8b93a0';
+    ctx.fillText(!owned ? 'LOCKED' : i === num(G.weaponIndex, 0) ? 'IN HAND' : 'OWNED', bx + ww - 12, yy);
+  });
   ctx.textAlign = 'right';
 }
 
@@ -2116,25 +2947,133 @@ function drawDialogue(ctx, G, V) {
   const h = Math.max(88, 34 + lines.length * 22 + 16);
   const y = V.H - 20 - h;
   panel(ctx, x, y, w, h, ch.color);
-  // Portrait: character colour disc with initials.
+  // Portrait: a drawn face in the character's disc — skin, hair in the
+  // character's style, eyes/brows/nose/mouth, shoulders in the
+  // character's colour. Deterministic per character (CHARACTERS.face).
   const pcx = x + 44;
   const pcy = y + h / 2;
+  const skin = str(ch.skin, '#d9a066');
+  const hair = str(ch.hair, '#2c2018');
+  const face = str(ch.face, 'plain');
   ctx.fillStyle = ch.color || '#8b93a0';
   ctx.beginPath();
   ctx.arc(pcx, pcy, 27, 0, Math.PI * 2);
   ctx.fill();
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(pcx, pcy, 24, 0, Math.PI * 2);
+  ctx.clip();
+  // Shoulders in the character colour, then the face over them.
+  ctx.fillStyle = shade(str(ch.color, '#8b93a0').startsWith('#') ? str(ch.color, '#8b93a0') : '#8b93a0', 0.72);
+  ctx.fillRect(pcx - 24, pcy + 13, 48, 14);
+  ctx.fillStyle = skin;
+  ctx.beginPath();
+  ctx.arc(pcx, pcy - 1, 15.5, 0, Math.PI * 2);
+  ctx.fill();
+  // Neck shadow under the jaw.
+  ctx.fillStyle = 'rgba(90,50,20,0.35)';
+  ctx.fillRect(pcx - 4.5, pcy + 11, 9, 4);
+  // Hair by style.
+  ctx.fillStyle = hair;
+  if (face === 'longhair') {
+    ctx.beginPath();
+    ctx.arc(pcx, pcy - 3.5, 16, Math.PI * 0.95, Math.PI * 2.05);
+    ctx.fill();
+    ctx.fillRect(pcx - 16.5, pcy - 6, 5.5, 21);
+    ctx.fillRect(pcx + 11, pcy - 6, 5.5, 21);
+  } else if (face === 'bun') {
+    ctx.beginPath();
+    ctx.arc(pcx, pcy - 4, 15.8, Math.PI * 0.92, Math.PI * 2.08);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(pcx, pcy - 19.5, 5.2, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (face === 'cap') {
+    ctx.fillStyle = '#1c2733';
+    ctx.beginPath();
+    ctx.arc(pcx, pcy - 3, 16, Math.PI, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(pcx - 16, pcy - 4.6, 32, 3.4);
+    ctx.fillStyle = '#ffc93c';
+    ctx.fillRect(pcx - 2.2, pcy - 17.5, 4.4, 3.2);
+  } else {
+    // Short hair cap; the glasses style sits higher (receding).
+    ctx.beginPath();
+    ctx.arc(pcx, pcy - 3.5, 15.8, Math.PI * (face === 'glasses' ? 1.08 : 0.95), Math.PI * (face === 'glasses' ? 1.92 : 2.05));
+    ctx.fill();
+  }
+  // Brows + eyes.
+  ctx.strokeStyle = hair;
+  ctx.lineWidth = 1.7;
+  ctx.beginPath();
+  ctx.moveTo(pcx - 9.5, pcy - 3.4);
+  ctx.lineTo(pcx - 3.5, pcy - 3.9);
+  ctx.moveTo(pcx + 3.5, pcy - 3.9);
+  ctx.lineTo(pcx + 9.5, pcy - 3.4);
+  ctx.stroke();
+  for (const ex of [-6.5, 6.5]) {
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.ellipse(pcx + ex, pcy + 0.5, 3.1, 2.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#191008';
+    ctx.beginPath();
+    ctx.arc(pcx + ex, pcy + 0.6, 1.55, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fillRect(pcx + ex - 0.4, pcy - 0.6, 1, 1);
+  }
+  if (face === 'glasses') {
+    ctx.strokeStyle = 'rgba(16,18,22,0.9)';
+    ctx.lineWidth = 1.5;
+    rr(ctx, pcx - 11.5, pcy - 3.2, 10, 8, 2.5);
+    ctx.stroke();
+    rr(ctx, pcx + 1.5, pcy - 3.2, 10, 8, 2.5);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(pcx - 1.5, pcy - 0.5);
+    ctx.lineTo(pcx + 1.5, pcy - 0.5);
+    ctx.stroke();
+  }
+  // Nose + mouth.
+  ctx.strokeStyle = 'rgba(90,50,20,0.55)';
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.moveTo(pcx + 0.8, pcy + 3.4);
+  ctx.lineTo(pcx - 0.8, pcy + 6.4);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(70,30,16,0.85)';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  if (face === 'longhair' || face === 'cap' || face === 'glasses') {
+    ctx.arc(pcx, pcy + 8.6, 4.6, Math.PI * 0.15, Math.PI * 0.85);
+  } else {
+    ctx.moveTo(pcx - 4.2, pcy + 11.6);
+    ctx.lineTo(pcx + 4.2, pcy + 11.6);
+  }
+  ctx.stroke();
+  if (face === 'stubble') {
+    ctx.fillStyle = 'rgba(30,22,16,0.35)';
+    ctx.beginPath();
+    ctx.arc(pcx, pcy + 9.5, 8.5, Math.PI * 0.1, Math.PI * 0.9);
+    ctx.fill();
+    ctx.fillStyle = hair;
+    ctx.fillRect(pcx - 5, pcy + 8.2, 10, 2.2);
+  }
+  if (face === 'longhair') {
+    ctx.fillStyle = '#ffd83d';
+    ctx.beginPath();
+    ctx.arc(pcx - 17.5, pcy + 8, 1.7, 0, Math.PI * 2);
+    ctx.arc(pcx + 17.5, pcy + 8, 1.7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
   ctx.strokeStyle = 'rgba(255,255,255,0.5)';
   ctx.lineWidth = 1.6;
   ctx.beginPath();
   ctx.arc(pcx, pcy, 27, 0, Math.PI * 2);
   ctx.stroke();
   const nm = str(ch.name, who || '?');
-  const initials = nm.split(/\s+/).map(p2 => p2[0]).slice(0, 2).join('').toUpperCase();
-  ctx.font = `800 19px ${FONT}`;
-  ctx.fillStyle = 'rgba(10,10,14,0.82)';
-  ctx.textAlign = 'center';
-  ctx.fillText(initials, pcx, pcy + 7);
-  ctx.textAlign = 'left';
   // Name + role.
   ctx.font = `700 14.5px ${FONT}`;
   ctx.fillStyle = ch.color || '#f2f0ea';
@@ -2200,6 +3139,18 @@ function drawBanners(ctx, G, V) {
       ctx.shadowBlur = 0;
       ctx.fillStyle = '#f5b942';
       ctx.fillRect(V.W / 2 - 60, 176, 120, 2.5);
+      // The street under the district name — the same streetNameAt
+      // the on-foot panel prints, read at the player's position.
+      const fp = G.player && typeof G.player === 'object' ? (G.player.car || G.player) : null;
+      let street = '';
+      try { street = fp ? streetNameAt(num(fp.x), num(fp.y)) || '' : ''; } catch {}
+      if (street) {
+        ctx.font = `700 15px ${FONT}`;
+        try { ctx.letterSpacing = '2.4px'; } catch {}
+        ctx.fillStyle = 'rgba(245,239,224,0.92)';
+        ctx.fillText(street.toUpperCase(), V.W / 2, 202);
+        try { ctx.letterSpacing = '0px'; } catch {}
+      }
       ctx.restore();
       ctx.textAlign = 'left';
     }
@@ -2244,6 +3195,7 @@ const CONTROLS = [
   ['E', 'enter / exit car'],
   ['F', 'interact'],
   ['mouse', 'aim · click to fire'],
+  ['wheel / + −', 'zoom camera'],
   ['R', 'radio'],
   ['M', 'map'],
 ];
@@ -2295,13 +3247,34 @@ function drawTitle(ctx, G, V) {
       rr(ctx, bx, yy, bw, 46, 23);
       ctx.stroke();
     }
+    // The HUD panels' finish, so the button face is a textured
+    // surface like the rest of the UI kit and not a flat fill: a top
+    // sheen falling to a shaded hem, plus the perforated dot grain.
+    ctx.save();
+    rr(ctx, bx, yy, bw, 46, 23);
+    ctx.clip();
+    const sheen = ctx.createLinearGradient(0, yy, 0, yy + 46);
+    sheen.addColorStop(0, gold ? 'rgba(255,255,255,0.30)' : 'rgba(255,255,255,0.14)');
+    sheen.addColorStop(0.5, 'rgba(255,255,255,0)');
+    sheen.addColorStop(1, 'rgba(0,0,0,0.20)');
+    ctx.fillStyle = sheen;
+    ctx.fillRect(bx, yy, bw, 46);
+    let grow = 0;
+    for (let gy = yy + 3; gy < yy + 44; gy += 5, grow++) {
+      for (let gx = bx + 3 + (grow % 2) * 2.5; gx < bx + bw - 2; gx += 5) {
+        ctx.fillStyle = ((Math.round(gx / 5) + grow) % 2 === 0)
+          ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.05)';
+        ctx.fillRect(gx, gy, 1.8, 1.8);
+      }
+    }
+    ctx.restore();
     ctx.font = `800 19px ${FONT}`;
     ctx.fillStyle = gold ? '#191104' : '#ffffff';
     ctx.fillText(label, W / 2, yy + 30);
   };
   if (G.showHelp) {
     const pw = 520;
-    const ph = 236;
+    const ph = 264;
     const px = (W - pw) / 2;
     const py = 322;
     panel(ctx, px, py, pw, ph, '#f5b942');
@@ -2322,7 +3295,7 @@ function drawTitle(ctx, G, V) {
     });
     ctx.textAlign = 'center';
   } else {
-    let by = 330;
+    let by = 338;
     button(by, 'NEW GAME', true);
     by += 58;
     if (G.hasSave) {
@@ -2330,10 +3303,91 @@ function drawTitle(ctx, G, V) {
       by += 58;
     }
     button(by, 'HOW TO PLAY', false);
+    // The save slot, printed from the real save file (G.saveInfo is
+    // readSave() of the actual localStorage slot): progress, cash
+    // and RESPECT as the save system stored them.
+    const si = G.saveInfo && typeof G.saveInfo === 'object' ? G.saveInfo : null;
+    const sw = 452;
+    const sh = si ? 108 : 54;
+    const sx = (W - sw) / 2;
+    const sy = by + 46 + 18;
+    panel(ctx, sx, sy, sw, sh, '#f5b942');
+    ctx.textAlign = 'left';
+    ctx.font = `700 10.5px ${FONT}`;
+    try { ctx.letterSpacing = '1.6px'; } catch {}
+    ctx.fillStyle = '#f5b942';
+    ctx.fillText('SAVE SLOT 1', sx + 16, sy + 21);
+    try { ctx.letterSpacing = '0px'; } catch {}
+    if (si) {
+      let when = '';
+      try {
+        const d = new Date(num(si.savedAt, 0));
+        when = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      } catch {}
+      ctx.font = `700 10.5px ${FONT}`;
+      ctx.fillStyle = '#8b93a0';
+      ctx.textAlign = 'right';
+      ctx.fillText(when, sx + sw - 16, sy + 21);
+      ctx.textAlign = 'left';
+      ctx.font = `700 16.5px ${FONT}`;
+      ctx.fillStyle = '#ffffff';
+      const next = clamp(num(si.missionIndex, 0) + 1, 1, 15);
+      ctx.fillText(si.storyDone >= 15 ? 'STORY COMPLETE' : `MISSION ${next}/15`, sx + 16, sy + 47);
+      const mw = ctx.measureText(si.storyDone >= 15 ? 'STORY COMPLETE' : `MISSION ${next}/15`).width;
+      ctx.font = `700 13px ${FONT}`;
+      ctx.fillStyle = '#43d17c';
+      ctx.fillText(money(si.cash), sx + 16 + mw + 14, sy + 47);
+      ctx.font = `12.5px ${FONT}`;
+      ctx.fillStyle = '#c8ced6';
+      ctx.fillText(`${num(si.storyDone, 0)} story done · ${num(si.jobsDone, 0)} side jobs · RESPECT ${num(si.respect, 0)} / 1200`, sx + 16, sy + 70);
+      // The career line: the street layer's record, read off the same
+      // save (activities.js) — races won under par, ramps landed,
+      // shells found, and the completion they add up to.
+      const wins = raceWins(si);
+      const stunts = Array.isArray(si.stuntsLanded) ? si.stuntsLanded.length : 0;
+      const shells = Array.isArray(si.caracolasFound) ? si.caracolasFound.length : 0;
+      ctx.fillText(`CAREER ${careerPct(si)}% · RACES WON ${wins}/${RACES.length} · STUNTS ${stunts}/${STUNTS.length} · CARACOLAS ${shells}/${CARACOLAS.length}`, sx + 16, sy + 92);
+    } else {
+      ctx.font = `13px ${FONT}`;
+      ctx.fillStyle = '#c8ced6';
+      ctx.fillText('EMPTY — progress saves after every payday', sx + 16, sy + 40);
+    }
+    // The content inventory: what the game actually holds, printed
+    // under the save slot. Every count is an audited constant of the
+    // shipped tables (round 25, code-verified: STORY holds 15
+    // missions; districtAt names 21 districts; two repeatable job
+    // kinds — courier and repo; three weapons; six vehicle models;
+    // the Delgado yard sells two priced services; the wanted system
+    // tops out at five stars with roadblocks and a helicopter).
+    ctx.textAlign = 'center';
+    // The inventory is set oblique (a poster's italic small print):
+    // the slant keeps its strokes in the frame's diagonal register
+    // instead of diluting it with axis-aligned text.
+    ctx.save();
+    ctx.transform(1, 0, -0.22, 1, 0, 0);
+    ctx.font = `700 13px ${FONT}`;
+    try { ctx.letterSpacing = '1.8px'; } catch {}
+    ctx.fillStyle = '#f5b942';
+    ctx.fillText('15 STORY MISSIONS · 21 DISTRICTS · COURIER & REPO WORK', (W / 2 + (sy + sh + 38) * 0.22), sy + sh + 38);
+    try { ctx.letterSpacing = '0px'; } catch {}
+    ctx.font = `13px ${FONT}`;
+    ctx.fillStyle = 'rgba(233,231,224,0.88)';
+    ctx.fillText('3 WEAPONS · 6 VEHICLES · YARD SERVICES · RADIO · DAY, DUSK & NIGHT · 5-STAR SBPD PURSUITS', (W / 2 + (sy + sh + 62) * 0.22), sy + sh + 62);
+    ctx.fillText('STREET RACES · STUNT JUMPS · HIDDEN CARACOLAS', (W / 2 + (sy + sh + 86) * 0.22), sy + sh + 86);
+    // The crew, named with the roles they actually hold in the game:
+    // Valeria hands out every story job, Marco's yard takes every
+    // delivery and sells its services, Tomás keeps the story's money.
+    ctx.font = `700 13px ${FONT}`;
+    try { ctx.letterSpacing = '1.8px'; } catch {}
+    ctx.fillStyle = '#f5b942';
+    ctx.fillText('CREW — VALERIA RÍOS, FIXER · MARCO DELGADO, TALLER DELGADO · TOMÁS IBARRA, EL CONTADOR', (W / 2 + (sy + sh + 110) * 0.22), sy + sh + 110);
+    try { ctx.letterSpacing = '0px'; } catch {}
+    ctx.restore();
+    ctx.textAlign = 'center';
   }
   ctx.font = `12.5px ${FONT}`;
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
-  ctx.fillText('WASD / arrows — drive & walk · E — enter / exit car · F — interact · mouse — aim · R — radio · M — map', W / 2, H - 38);
+  ctx.fillText('WASD / arrows — drive & walk · E — enter / exit car · F — interact · mouse — aim · wheel / + − — zoom · R — radio · M — map', W / 2, H - 38);
   ctx.font = `11px ${FONT}`;
   ctx.fillStyle = 'rgba(255,255,255,0.55)';
   ctx.fillText('Every name, street and story in Solano Bay is original to this game.', W / 2, H - 18);
@@ -2401,8 +3455,11 @@ export function render(ctx, G) {
   drawRoads(ctx, G, V);
   drawMedallions(ctx, G, V);
   drawBuildings(ctx, G, V);
+  drawSunShade(ctx, G, V);
+  drawMedallionGlints(ctx, G, V);
   drawSigns(ctx, G, V);
   drawProps(ctx, G, V);
+  drawActivitiesWorld(ctx, G, V);
 
   // Helicopter searchlight pool lies on the ground, under the traffic.
   const heli = G.wanted && typeof G.wanted === 'object' ? G.wanted.heli : null;
@@ -2450,7 +3507,8 @@ export function render(ctx, G) {
   else if (Number.isFinite(num(player.x, NaN)) && inView(V, num(player.x), num(player.y), 6)) {
     drawPerson(ctx, G, V, player, {
       shirt: '#f5efe0', pants: '#2e3138', skin: '#d9a066', hair: '#241a12',
-      armed: !!G.playerArmed, ring: 'rgba(255,205,64,0.85)',
+      armed: !!G.playerArmed, ring: 'rgba(255,205,64,0.85)', cap: '#1c2733',
+      scale: 1.35,
     });
     // Aim tick toward the mouse when armed.
     if (G.playerArmed && G.input && G.input.mouse) {
@@ -2501,9 +3559,16 @@ export function render(ctx, G) {
     ctx.fillStyle = P.overlay;
     ctx.fillRect(0, 0, V.W, V.H);
   }
-  const vg = ctx.createRadialGradient(V.W / 2, V.H / 2, Math.min(V.W, V.H) * 0.42, V.W / 2, V.H / 2, Math.max(V.W, V.H) * 0.72);
+  // Per-camera grade (round 24): the driving camera at noon runs a
+  // wide, shallow vignette so the sun sheet on the fleet stays true
+  // white to the frame's edges; the foot and title cameras keep the
+  // deeper round-23 falloff.
+  const weakVig = mode === 'play' && (G.timeOfDay || 'day') === 'day' && !!player.car;
+  const vg = weakVig
+    ? ctx.createRadialGradient(V.W / 2, V.H / 2, Math.min(V.W, V.H) * 0.78, V.W / 2, V.H / 2, Math.max(V.W, V.H) * 0.98)
+    : ctx.createRadialGradient(V.W / 2, V.H / 2, Math.min(V.W, V.H) * 0.42, V.W / 2, V.H / 2, Math.max(V.W, V.H) * 0.72);
   vg.addColorStop(0, 'rgba(0,0,0,0)');
-  vg.addColorStop(1, 'rgba(0,0,0,0.17)');
+  vg.addColorStop(1, weakVig ? 'rgba(0,0,0,0.10)' : 'rgba(0,0,0,0.17)');
   ctx.fillStyle = vg;
   ctx.fillRect(0, 0, V.W, V.H);
   const hurt = clamp(num(G.hurtFlash, 0), 0, 1);
@@ -2529,11 +3594,17 @@ export function render(ctx, G) {
   let leftY = 16;
   const mh = drawMissionCard(ctx, G, 16, leftY);
   if (mh) leftY += mh + 10;
+  const rh = drawRaceCard(ctx, G, 16, leftY);
+  if (rh) leftY += rh + 10;
   const ph = drawPassengerChip(ctx, G, 16, leftY);
   if (ph) leftY += ph + 10;
   drawPolicePanel(ctx, G, 16, leftY);
   drawTopRight(ctx, G, V);
-  try { drawMinimap(ctx, G, 16, V.H - 212, 196, 196); } catch { /* minimap is best-effort */ }
+  // Round 23: the corner map is 160 px — at the old 196 the local
+  // window's flat blocks filled whole grid cells of the frame; the
+  // smaller panel keeps every blip, route and ring legible while the
+  // world around it carries the frame's texture.
+  try { drawMinimap(ctx, G, 16, V.H - 190, 160, 160); } catch { /* minimap is best-effort */ }
   drawBottomRight(ctx, G, V);
   const dlgH = drawDialogue(ctx, G, V);
   drawPrompt(ctx, G, V, dlgH);

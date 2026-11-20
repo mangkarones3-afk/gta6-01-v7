@@ -25,6 +25,16 @@ export class Input {
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.mouse.down = false;
     });
+    // Round 27: mouse-wheel zoom for the follow camera. wheelSteps counts
+    // pending notches (positive = scrolled down = zoom out); updateCamera
+    // consumes and clears it each frame. Clamped so a fast scroll cannot
+    // queue a long zoom run.
+    this.wheelSteps = 0;
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      if (e.deltaY > 0) this.wheelSteps = Math.min(8, this.wheelSteps + 1);
+      else if (e.deltaY < 0) this.wheelSteps = Math.max(-8, this.wheelSteps - 1);
+    }, { passive: false });
   }
 
   held(code) {

@@ -1,18 +1,19 @@
-// missions.js — the story of Nico Ferrer in five jobs for Valeria Ríos, plus
-// repeatable courier and repo work. A mission is a list of stages (talk,
-// steal, deliver, fight, escape, pickup); this module runs the stages, pays
-// the cash, writes the dialogue and keeps the HUD's mission card honest.
+// missions.js — the story of Nico Ferrer in fifteen jobs for Valeria Ríos,
+// plus repeatable courier and repo work. A mission is a list of stages
+// (talk, steal, deliver, fight, escape, pickup); this module runs the
+// stages, pays the cash, writes the dialogue and keeps the HUD's mission
+// card honest.
 
 import { POIS, findFree } from './city.js';
 import { makeCar } from './vehicles.js';
 import { writeSave } from './save.js';
 
 export const CHARACTERS = {
-  val: { name: 'Valeria Ríos', color: '#e84393', role: 'Fixer' },
-  marco: { name: 'Marco Delgado', color: '#e67e22', role: 'Taller Delgado' },
-  tomas: { name: 'Tomás Ibarra', color: '#00b894', role: 'El Contador' },
-  duarte: { name: 'Insp. Carla Duarte', color: '#3fa9f5', role: 'SBPD' },
-  nico: { name: 'Nico Ferrer', color: '#f5efe0', role: 'You' },
+  val: { name: 'Valeria Ríos', color: '#e84393', role: 'Fixer', skin: '#c98d5f', hair: '#1d1410', face: 'longhair' },
+  marco: { name: 'Marco Delgado', color: '#e67e22', role: 'Taller Delgado', skin: '#d9a066', hair: '#2c2018', face: 'stubble' },
+  tomas: { name: 'Tomás Ibarra', color: '#00b894', role: 'El Contador', skin: '#e0ac69', hair: '#8a8d90', face: 'glasses' },
+  duarte: { name: 'Insp. Carla Duarte', color: '#3fa9f5', role: 'SBPD', skin: '#b97a4e', hair: '#14100c', face: 'bun' },
+  nico: { name: 'Nico Ferrer', color: '#f5efe0', role: 'You', skin: '#d9a066', hair: '#241a12', face: 'cap' },
 };
 
 function actor(G, name, x, y, opts = {}) {
@@ -167,6 +168,266 @@ const STORY = [
       ] },
     ],
   },
+  {
+    title: 'The Night Deposit',
+    chapter: 'Chapter 6 · The Night Deposit',
+    pay: 3400,
+    setup(G, M) {
+      const car = makeCar('brisa', 742, 128, 0, {});
+      car.color = '#c0c6cc';
+      car.driver = null;
+      G.cars.push(car);
+      M.targetCar = car;
+    },
+    stages: [
+      { type: 'talk', text: 'Answer Val', hint: 'The day\'s take moves at night', say: [
+        ['val', 'Retirement was short, Nico. A silver Brisa at Torre Oficinas carries the day\'s take from three of my fronts.'],
+        ['val', 'No courier, no paper. Take the car and park it at Librería Faro — Tomás counts it after close.'],
+      ] },
+      { type: 'steal', text: 'Steal the silver Brisa at Torre Oficinas', hint: 'Parked on Calle Aurora, keys in', heat: 200, say: [
+        ['duarte', 'SBPD — a Brisa just lit up on Aurora. Two stars, keep it clean.'],
+      ] },
+      { type: 'deliver', x: 120, y: () => POIS.libreriaFaro.y, r: 9, text: 'Park the Brisa on Av. del Faro, opposite Librería Faro', hint: 'Leave it at the kerb by the bookshop', say: [] },
+      { type: 'talk', text: 'Confirm with Tomás', hint: 'The count happens off the books', say: [
+        ['tomas', 'Three fronts, one car, no witnesses. You are a bank now, Nico.'],
+        ['val', 'Sleep tomorrow. Tonight the bay still owes us.'],
+      ] },
+    ],
+  },
+  {
+    title: 'Beach Money',
+    chapter: 'Chapter 7 · Beach Money',
+    pay: 3750,
+    setup(G, M) {
+      M.thugs = [
+        actor(G, 'Renzo', POIS.beach.x - 4, POIS.beach.y + 4, { shirt: '#574b90' }),
+        actor(G, 'Paco', POIS.beach.x + 4, POIS.beach.y + 4, { shirt: '#2d3436' }),
+      ];
+    },
+    stages: [
+      { type: 'talk', text: 'Answer Val', hint: 'A drop on the sand, low tide', say: [
+        ['val', 'A courier who owed me dropped a bag on the beach and kept walking. Low tide, south sand.'],
+        ['val', 'His cousins Renzo and Paco may have had the same idea. Persuade them otherwise.'],
+      ] },
+      { type: 'pickup', x: () => POIS.beach.x, y: () => POIS.beach.y, r: 3,
+        text: 'Collect the bag on the beach', hint: 'On foot, in the sand', say: [
+          ['nico', 'Heavy for a beach day. Val counts it, I just sweat.'],
+        ] },
+      { type: 'fight', text: 'Deal with Renzo and Paco', hint: 'Mouse aims, click fires, R reloads', heat: 215, say: [
+        ['val', 'Shouting on my beach, Nico. End it and vanish — Duarte loves a crowd.'],
+      ] },
+      { type: 'escape', maxStars: 1, text: 'Lose the SBPD', hint: 'Break their sight line — or cool down at Taller Delgado', say: [] },
+      { type: 'goto', x: () => POIS.tallerYard.x, y: () => POIS.tallerYard.y, r: 9,
+        text: 'Bring the bag to Taller Delgado', hint: 'Marco holds Val\'s cash', say: [
+          ['marco', 'Sand in the seams and still full. The bay provides, eh?'],
+        ] },
+    ],
+  },
+  {
+    title: 'Prisma After Dark',
+    chapter: 'Chapter 8 · Prisma After Dark',
+    pay: 4100,
+    setup(G, M) {
+      const van = makeCar('furgon', 960, 128, Math.PI / 2, {});
+      van.color = '#7f8c8d';
+      van.driver = null;
+      G.cars.push(van);
+      M.targetCar = van;
+    },
+    stages: [
+      { type: 'talk', text: 'Answer Val', hint: 'The Galería\'s night van runs a different cargo', say: [
+        ['val', 'Galería Prisma\'s night Furgón carries returns that were never sold and never will be.'],
+        ['val', 'Take it after close and run it to the marina pier. A boat does the rest — boats always do.'],
+      ] },
+      { type: 'steal', text: 'Take the night Furgón at Galería Prisma', hint: 'The grey van by the loading door', heat: 260, say: [
+        ['duarte', 'All units — Prisma\'s van is rolling without a manifest. Bring it in.'],
+      ] },
+      { type: 'deliver', x: () => POIS.marinaPier.x, y: () => POIS.marinaPier.y, r: 8,
+        text: 'Reach the marina pier', hint: 'End of the pier, La Marina', time: 280, say: [] },
+      { type: 'talk', text: 'Hand over the keys', hint: 'The boat crew does not talk', say: [
+        ['tomas', 'Returns, refunds, ghosts. The pier forgets everything by morning.'],
+        ['val', 'Good. The Galería owes us a quieter kind of rent now.'],
+      ] },
+    ],
+  },
+  {
+    title: 'The Contador\'s Ride',
+    chapter: 'Chapter 9 · The Contador\'s Ride',
+    pay: 4500,
+    setup(G, M) {
+      M.tomas = actor(G, 'Tomás Ibarra', POIS.torreOficinas.x, POIS.torreOficinas.y, { shirt: '#00b894' });
+    },
+    stages: [
+      { type: 'talk', text: 'Answer Val', hint: 'Tomás cannot be seen driving tonight', say: [
+        ['val', 'Tomás testified in a room with no windows today. Duarte\'s people are watching every wheel he owns.'],
+        ['val', 'Pick him up at Torre Oficinas in anything anonymous and put him at Cine Aurora. He has a premiere to haunt.'],
+      ] },
+      { type: 'pickup', x: () => POIS.torreOficinas.x, y: () => POIS.torreOficinas.y, r: 7, inCar: true,
+        text: 'Pick up Tomás at Torre Oficinas', hint: 'Pull up beside him', heat: 300, say: [
+          ['tomas', 'No names in the car, Nico. Drive like the street is rented.'],
+          ['duarte', 'That car just collected a witness. Stay with it, HELI-1 is turning.'],
+        ] },
+      { type: 'deliver', x: () => POIS.cineAurora.x, y: () => POIS.cineAurora.y, r: 8,
+        text: 'Drop Tomás at Cine Aurora', hint: 'The cinema steps, quick and quiet', say: [] },
+      { type: 'talk', text: 'See Tomás in', hint: 'He disappears into the matinee crowd', say: [
+        ['tomas', 'A dark room full of strangers. The safest address in Solano Bay.'],
+        ['val', 'He lives another week. So does his ledger. So do we.'],
+      ] },
+    ],
+  },
+  {
+    title: 'Aurora Matinee',
+    chapter: 'Chapter 10 · Aurora Matinee',
+    pay: 4900,
+    setup(G, M) {},
+    stages: [
+      { type: 'talk', text: 'Answer Val', hint: 'Small job, no wheels, no noise', say: [
+        ['val', 'The Aurora\'s projectionist holds a film can that is not a film. Walk in, walk out.'],
+        ['val', 'Carry it to Restaurante Cielo on foot or wheels, your choice — just do not open it.'],
+      ] },
+      { type: 'pickup', x: () => POIS.cineAurora.x, y: () => POIS.cineAurora.y, r: 3,
+        text: 'Collect the film can at Cine Aurora', hint: 'On foot, at the door', say: [
+          ['nico', 'Heavier than a love story. Lighter than the truth, probably.'],
+        ] },
+      { type: 'goto', x: () => POIS.restauranteCielo.x, y: () => POIS.restauranteCielo.y, r: 7,
+        text: 'Deliver the can to Restaurante Cielo', hint: 'The maître d\' knows the can, not you', say: [] },
+      { type: 'talk', text: 'Leave quietly', hint: 'Dessert is on the house, questions are not', say: [
+        ['val', 'Whatever was in that can, Cielo pays double for the silence around it.'],
+        ['marco', 'You walked a job, Nico? The bay is changing you.'],
+      ] },
+    ],
+  },
+  {
+    title: 'Mercado Muscle',
+    chapter: 'Chapter 11 · Mercado Muscle',
+    pay: 5300,
+    setup(G, M) {
+      M.thugs = [
+        actor(G, 'Ivo', POIS.elMercado.x - 4, POIS.elMercado.y + 4, { shirt: '#2d3436' }),
+        actor(G, 'Sandro', POIS.elMercado.x + 4, POIS.elMercado.y + 4, { shirt: '#b03a2e' }),
+      ];
+    },
+    stages: [
+      { type: 'talk', text: 'Answer Val', hint: 'The market pays somebody else now', say: [
+        ['val', 'El Mercado\'s stallholders started paying two new collectors, Ivo and Sandro. The strongbox sits in the plaza.'],
+        ['val', 'Take the collectors off the plaza first. Then take the box. Order matters.'],
+      ] },
+      { type: 'fight', text: 'Clear Ivo and Sandro off the plaza', hint: 'Mouse aims, click fires, R reloads', heat: 215, say: [
+        ['duarte', 'Shots at El Mercado — all units, but keep it surgical.'],
+      ] },
+      { type: 'pickup', x: () => POIS.elMercado.x, y: () => POIS.elMercado.y, r: 3,
+        text: 'Take the strongbox from the plaza', hint: 'On foot, centre of El Mercado', say: [
+          ['nico', 'Rent, protection, and interest. The market settles its own books.'],
+        ] },
+      { type: 'goto', x: () => POIS.tallerYard.x, y: () => POIS.tallerYard.y, r: 9,
+        text: 'Bring the strongbox to Taller Delgado', hint: 'Marco holds Val\'s cash', say: [
+          ['marco', 'The stallholders send their thanks, Nico. In cash, mostly.'],
+        ] },
+    ],
+  },
+  {
+    title: 'Faro Run',
+    chapter: 'Chapter 12 · Faro Run',
+    pay: 5800,
+    setup(G, M) {
+      const car = makeCar('caspian', 240, 369, 0, {});
+      car.color = '#b03a2e';
+      car.driver = null;
+      G.cars.push(car);
+      M.targetCar = car;
+    },
+    stages: [
+      { type: 'talk', text: 'Answer Val', hint: 'A red Caspián, a short fuse', say: [
+        ['val', 'A crimson Caspián by Mercado Central is loaded with Cielo\'s real books — the ones with two endings.'],
+        ['val', 'Marco needs it in his yard before the ink dries. Clock is running, Nico.'],
+      ] },
+      { type: 'steal', text: 'Steal the crimson Caspián by Mercado Central', hint: 'Walk to the car and press E', heat: 300, say: [
+        ['duarte', 'That Caspián again — the bay has a favourite. Do not lose it this time.'],
+      ] },
+      { type: 'deliver', text: 'Deliver the Caspián to Taller Delgado', hint: 'Fast — the clock is part of the job', time: 150, say: [] },
+      { type: 'talk', text: 'Collect from Marco', hint: 'Marco is waiting in the yard', say: [
+        ['marco', 'Two endings, and in both of them we get paid. Bring me more books like this.'],
+      ] },
+    ],
+  },
+  {
+    title: 'Prisma Papers',
+    chapter: 'Chapter 13 · Prisma Papers',
+    pay: 6300,
+    setup(G, M) {
+      M.thugs = [
+        actor(G, 'Kiko', POIS.torreOficinas.x - 4, POIS.torreOficinas.y + 4, { shirt: '#574b90' }),
+        actor(G, 'Ruy', POIS.torreOficinas.x + 4, POIS.torreOficinas.y + 4, { shirt: '#2d3436' }),
+      ];
+    },
+    stages: [
+      { type: 'talk', text: 'Answer Val', hint: 'Paper moves quieter than money', say: [
+        ['val', 'A folder at Galería Prisma names the buyer of every returned ghost in this city. Collect it.'],
+        ['val', 'Walk it to Torre Oficinas. If Kiko and Ruy are waiting there — they are — finish the conversation.'],
+      ] },
+      { type: 'pickup', x: () => POIS.galeriaPrisma.x, y: () => POIS.galeriaPrisma.y, r: 3,
+        text: 'Collect the folder at Galería Prisma', hint: 'On foot, at the door', say: [
+          ['nico', 'Names, dates, prices. The whole bay in forty pages.'],
+        ] },
+      { type: 'goto', x: () => POIS.torreOficinas.x, y: () => POIS.torreOficinas.y, r: 7,
+        text: 'Carry the folder to Torre Oficinas', hint: 'Tomás\'s floor — and Kiko and Ruy', say: [] },
+      { type: 'fight', text: 'Deal with Kiko and Ruy', hint: 'Mouse aims, click fires, R reloads', heat: 215, say: [
+        ['val', 'I can hear that argument from here, Nico. Win it and get scarce.'],
+      ] },
+      { type: 'escape', maxStars: 1, text: 'Lose the SBPD', hint: 'Break their sight line — or cool down at Taller Delgado', say: [] },
+    ],
+  },
+  {
+    title: 'Last Van Standing',
+    chapter: 'Chapter 14 · Last Van Standing',
+    pay: 6900,
+    setup(G, M) {
+      const van = makeCar('furgon', 560, 369, Math.PI / 2, {});
+      van.color = '#7f8c8d';
+      van.driver = null;
+      G.cars.push(van);
+      M.targetCar = van;
+    },
+    stages: [
+      { type: 'talk', text: 'Answer Val', hint: 'One van the SBPD never catalogued', say: [
+        ['val', 'One grey Furgón on Calle del Mercado never made it into any catalogue, any manifest, any memory.'],
+        ['val', 'Galería Prisma wants it inside their loading door before Duarte\'s audit starts. She audits at dawn.'],
+      ] },
+      { type: 'steal', text: 'Take the grey Furgón on Calle del Mercado', hint: 'The unmarked van, mid-block', say: [] },
+      { type: 'deliver', x: () => POIS.galeriaPrisma.x, y: () => POIS.galeriaPrisma.y, r: 9, text: 'Deliver the Furgón to Galería Prisma', hint: 'Before the audit — clock is running', time: 200, heat: 130, say: [
+        ['duarte', 'An unregistered van just moved on Mercado. Somebody is tidying. Follow it.'],
+      ] },
+      { type: 'talk', text: 'Confirm the delivery', hint: 'The Galería\'s door closes behind it', say: [
+        ['tomas', 'Audited, and nothing to find. You are an eraser, Nico.'],
+        ['val', 'One van left in the whole bay with your name nowhere near it. Good.'],
+      ] },
+    ],
+  },
+  {
+    title: 'Solano Bay Is Yours',
+    chapter: 'Chapter 15 · Solano Bay Is Yours',
+    pay: 8000,
+    setup(G, M) {
+      M.tomas = actor(G, 'Tomás Ibarra', POIS.restauranteCielo.x, POIS.restauranteCielo.y, { shirt: '#00b894' });
+    },
+    stages: [
+      { type: 'talk', text: 'Answer Val', hint: 'The last ride of the season', say: [
+        ['val', 'Last one, Nico. Tomás signed the bay over tonight — every front, every debt, every quiet door.'],
+        ['val', 'He celebrates at Restaurante Cielo and sails from the marina. Duarte knows the hour. Bring him to the water.'],
+      ] },
+      { type: 'pickup', x: () => POIS.restauranteCielo.x, y: () => POIS.restauranteCielo.y, r: 7, inCar: true,
+        text: 'Pick up Tomás at Restaurante Cielo', hint: 'Pull up beside him', heat: 430, say: [
+          ['tomas', 'Fifteen jobs, Nico. The tide kept every receipt. Drive.'],
+          ['duarte', 'HELI-1 has the car. Whatever happens tonight, that coupé does not reach the water.'],
+        ] },
+      { type: 'deliver', x: () => POIS.marinaPier.x, y: () => POIS.marinaPier.y, r: 8,
+        text: 'Reach the marina pier', hint: 'End of the pier, La Marina', time: 260, say: [] },
+      { type: 'talk', text: 'See Tomás off', hint: 'The boat is waiting', say: [
+        ['tomas', 'The fronts, the books, the beach, the bay — yours, Nico Ferrer. Spend it somewhere warm.'],
+        ['val', 'Fifteen jobs and the city still stands. That is the whole trick of Solano Bay.'],
+      ] },
+    ],
+  },
 ];
 
 const JOB_SPOTS = ['mercadoDoor', 'cineAurora', 'restauranteCielo', 'galeriaPrisma', 'libreriaFaro', 'barElPuerto', 'torreOficinas'];
@@ -176,6 +437,7 @@ export class Missions {
     this.index = 0;
     this.storyDone = false;
     this.jobsDone = 0;
+    this.storyTotal = STORY.length;
     this.active = null;
     this.marker = null;
   }
@@ -230,6 +492,12 @@ export class Missions {
       },
       stages: [
         { type: 'steal', text: 'Take the marked repo car', hint: 'The owner is behind on payments — and on luck', heat: 110, say: [] },
+        // East-half spawns route along Calle del Mercado first: the
+        // direct diagonal from the south-east blocks grinds through
+        // two block faces, while the corridor is one clean street.
+        ...(free.x > 700
+          ? [{ type: 'deliver', x: 840, y: 360, r: 11, text: 'Get it onto Calle del Mercado', hint: 'Av. del Puerto crossing — then straight west to the yard', say: [] }]
+          : []),
         { type: 'deliver', text: "Deliver it to Marco's yard", hint: 'Taller Delgado pays per panel, so keep it straight', say: [['marco', 'Another one for the yard. The bay provides, eh?']] },
       ],
     };
@@ -292,6 +560,9 @@ export class Missions {
     const M = this.active;
     const pay = M.def.pay;
     G.player.cash += pay;
+    // RESPECT — the street's second currency: story work pays 100 a
+    // chapter, side work 40 a job, toward the 1200 the bay respects.
+    G.respect = Math.min(1200, (G.respect || 0) + (M.kind === 'story' ? 100 : 40));
     G.audio?.sting();
     G.banner = { title: M.kind === 'story' ? 'JOB DONE' : 'WORK DONE', sub: `${M.def.title} · +$${pay.toLocaleString('en-US')}`, t: 3.4 };
     if (M.kind === 'story') {

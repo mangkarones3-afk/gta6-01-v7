@@ -35,6 +35,11 @@ export function makeCar(modelKey, x, y, angle, opts = {}) {
     cruise: randRange(opts.rng || Math.random, 9, 13),
     lightPhase: Math.random() * Math.PI * 2,
     dead: false,
+    // Stunt state (activities.js): z is the height above the ground in
+    // metres while air is the flight record; both rest at ground level.
+    z: 0,
+    air: null,
+    justLanded: null,
   };
 }
 
@@ -69,6 +74,26 @@ export function doorPoint(car) {
 // Advance one car by dt under a control {throttle, steer, brake}.
 // Returns the crash strength (0 when the way was clear).
 export function updateCar(car, control, dt) {
+  // Airborne off a stunt ramp: the car holds its launch velocity on a
+  // fixed arc — no throttle, no steering, no ground collision — until
+  // the arc ends and activities.js settles and scores the landing.
+  if (car.air) {
+    const air = car.air;
+    air.t += dt;
+    car.x += car.vx * dt;
+    car.y += car.vy * dt;
+    const k = Math.min(1, air.t / air.dur);
+    car.z = 4 * 2.3 * k * (1 - k);
+    if (air.t >= air.dur) {
+      car.air = null;
+      car.z = 0;
+      car.justLanded = {
+        ramp: air.ramp, x0: air.x0, y0: air.y0,
+        dist: Math.hypot(car.x - air.x0, car.y - air.y0), airT: air.dur,
+      };
+    }
+    return 0;
+  }
   const m = car.model;
   const fx = Math.cos(car.angle);
   const fy = Math.sin(car.angle);
